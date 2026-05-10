@@ -1,23 +1,27 @@
 """Step 4: извлечение атрибутов (бренд, тип товара, объём, упаковка, вариант)."""
 import re
+import time
 from decimal import Decimal
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from product_db.models.db import Brand, BrandAlias, ProductType
+from product_db.nlp.fuzzy import find_best_brand
+from product_db.nlp.lemmatize import lemmatize_ru
 from .context import PipelineContext
 
 # --------------------------------------------------------------------------
-# Quantity regex: "0.5л" / "500 мл" / "1кг" / "200г" / "5шт"
+# Quantity regex
 # --------------------------------------------------------------------------
 _QTY_RE = re.compile(
-    r"(\d+(?:[.,]\d+)?)\s*(мл|мл\.|ml|л\b|л\.|litre|литр|l\b|г\b|г\.|гр\b|gram|g\b|кг|kg|шт|pcs|pc\b)",
+    r"(\d+(?:[.,]\d+)?)\s*"
+    r"(мл|мл\.|ml|л\b|литр|litre|l\b|г\b|г\.|гр\b|gram|g\b|кг|kg|шт|pcs|pc\b)",
     re.IGNORECASE,
 )
 _UNIT_MAP = {
     "мл": "ml", "мл.": "ml", "ml": "ml",
-    "л": "l", "л.": "l", "litre": "l", "литр": "l", "l": "l",
+    "л": "l", "л.": "l", "литр": "l", "litre": "l", "l": "l",
     "г": "g", "г.": "g", "гр": "g", "gram": "g", "g": "g",
     "кг": "kg", "kg": "kg",
     "шт": "pcs", "pcs": "pcs", "pc": "pcs",
@@ -39,6 +43,14 @@ _PKG_MAP = {
     "коробка": "BOX", "box": "BOX", "картон": "BOX",
 }
 
+# --------------------------------------------------------------------------
+# In-memory alias cache: list[(alias, brand_id, canonical_name)]
+# Обновляется раз в 5 минут
+# --------------------------------------------------------------------------
+_alias_cache: list[tuple[str, int, str]] = []
+_alias_cache_ts: float = 0.0
+_CACHE_TTL = 300  # секунд
+
 
 def _extract_quantity(text: str) -> tuple[Decimal | None, str | None]:
     m = _QTY_RE.search(text)
@@ -56,55 +68,56 @@ def _extract_package(text: str) -> str | None:
     return _PKG_MAP.get(m.group(1).lower())
 
 
-async def _find_brand(session: AsyncSession, text: str) -> tuple[int | None, str | None]:
-    """Ищет бренд по тексту через brand_aliases (точное совпадение слова)."""
-    # Загружаем все алиасы — для Этапа 1 (нет fuzzy)
+async def _get_alias_cache(session: AsyncSession) -> list[tuple[str, int, str]]:
+    global _alias_cache, _alias_cache_ts
+    if time.time() - _alias_cache_ts < _CACHE_TTL and _alias_cache:
+        return _alias_cache
     result = await session.execute(
-        select(BrandAlias.brand_id, BrandAlias.alias, Brand.name_canonical)
+        select(BrandAlias.alias, BrandAlias.brand_id, Brand.name_canonical)
         .join(Brand, Brand.id == BrandAlias.brand_id)
-        .order_by(BrandAlias.alias)
     )
-    rows = result.all()
-
-    text_lower = text.lower()
-    # Приоритет: более длинные алиасы первыми (чтобы "Coca-Cola" не перебивал "Cola")
-    rows_sorted = sorted(rows, key=lambda r: len(r.alias), reverse=True)
-    for row in rows_sorted:
-        if re.search(r"\b" + re.escape(row.alias.lower()) + r"\b", text_lower):
-            return row.brand_id, row.name_canonical
-    return None, None
+    _alias_cache = [(row.alias, row.brand_id, row.name_canonical) for row in result.all()]
+    _alias_cache_ts = time.time()
+    return _alias_cache
 
 
 async def _find_product_type(session: AsyncSession, tokens: list[str]) -> tuple[int | None, str | None]:
-    """Ищет тип товара по ключевым словам из product_types."""
     result = await session.execute(
         select(ProductType.id, ProductType.name_ru, ProductType.keywords_ru)
     )
     rows = result.all()
+    lemmas = set(lemmatize_ru(" ".join(tokens)).split())
 
-    token_set = set(tokens)
     best_id, best_name, best_score = None, None, 0
     for row in rows:
         if not row.keywords_ru:
             continue
-        matches = sum(1 for kw in row.keywords_ru if kw.lower() in token_set)
+        kw_lemmas = {lemmatize_ru(kw) for kw in row.keywords_ru}
+        matches = len(lemmas & kw_lemmas)
         if matches > best_score:
             best_score = matches
             best_id = row.id
             best_name = row.name_ru
+
     return best_id, best_name
 
 
 async def run(ctx: PipelineContext, session: AsyncSession) -> PipelineContext:
     text = ctx.name_raw
 
+    # Количество и упаковка — через regex
     ctx.quantity_value, ctx.quantity_unit = _extract_quantity(text)
     ctx.package_code = _extract_package(text)
 
-    ctx.brand_id, ctx.brand_name = await _find_brand(session, text)
-    if ctx.brand_id:
-        ctx.field_sources["brand_id"] = f"extract:{ctx.source_id}"
+    # Бренд — точное слово + fuzzy fallback
+    aliases = await _get_alias_cache(session)
+    brand_id, brand_name, score = find_best_brand(text, aliases)
+    if brand_id:
+        ctx.brand_id = brand_id
+        ctx.brand_name = brand_name
+        ctx.field_sources["brand_id"] = f"extract:{ctx.source_id}:{score:.0f}"
 
+    # Тип товара — по лемматизированным ключевым словам
     ctx.product_type_id, ctx.product_type_name = await _find_product_type(session, ctx.tokens)
     if ctx.product_type_id:
         ctx.field_sources["product_type_id"] = f"extract:{ctx.source_id}"

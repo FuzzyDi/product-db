@@ -1,14 +1,17 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from product_db.api.routes import intake, products, stats
+from product_db.api.routes import intake, mxik, products, refs, review, stats
 
-app = FastAPI(title="Product DB", version="0.1.0")
+app = FastAPI(title="Product DB", version="0.2.0")
 
 API_PREFIX = "/api/v1"
-app.include_router(intake.router, prefix=API_PREFIX)
+app.include_router(intake.router,   prefix=API_PREFIX)
 app.include_router(products.router, prefix=API_PREFIX)
-app.include_router(stats.router, prefix=API_PREFIX)
+app.include_router(review.router,   prefix=API_PREFIX)
+app.include_router(mxik.router,     prefix=API_PREFIX)
+app.include_router(refs.router,     prefix=API_PREFIX)
+app.include_router(stats.router,    prefix=API_PREFIX)
 
 
 @app.exception_handler(Exception)
