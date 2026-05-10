@@ -1,9 +1,13 @@
 """POST /api/v1/intake — приём товаров."""
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from product_db.core.ratelimit import limiter
 
 from product_db.db.session import get_db
 from product_db.models.db import RawInputLog
@@ -21,7 +25,8 @@ router = APIRouter(prefix="/intake", tags=["intake"])
 
 
 @router.post("/single", response_model=ApiResponse)
-async def intake_single(req: ProductIntakeRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("120/minute")
+async def intake_single(request: Request, req: ProductIntakeRequest, db: AsyncSession = Depends(get_db)):
     payload = {"name": req.name, "barcode": req.barcode, **req.extra}
     ctx = await process(db, source_id=req.source_id, source_type="api", payload=payload)
     data = IntakeResponse(
@@ -37,7 +42,8 @@ async def intake_single(req: ProductIntakeRequest, db: AsyncSession = Depends(ge
 
 
 @router.post("/batch", response_model=ApiResponse)
-async def intake_batch(req: BatchIntakeRequest):
+@limiter.limit("20/minute")
+async def intake_batch(request: Request, req: BatchIntakeRequest):
     """Ставит товары в очередь Celery (асинхронно)."""
     task_ids = []
     for item in req.items:
