@@ -22,6 +22,10 @@ app.conf.beat_schedule = {
         "task": "product_db.tasks.quality_stats.collect_quality_stats",
         "schedule": crontab(hour=3, minute=0),
     },
+    "batch-learn-hourly": {
+        "task": "product_db.tasks.learn.batch_learn",
+        "schedule": crontab(minute=0),  # каждый час
+    },
 }
 
 app.autodiscover_tasks(["product_db.tasks"])

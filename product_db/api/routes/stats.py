@@ -1,10 +1,12 @@
 """GET /api/v1/stats — статистика."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from product_db.db.session import get_db
-from product_db.models.db import MxikCatalog, MxikSyncLog, Product, ProductBarcode
+from product_db.models.db import (
+    BrandAlias, MxikCatalog, MxikSyncLog, OperatorDecision, Product, ProductBarcode, QualityStat,
+)
 from product_db.models.schemas import ApiResponse, MxikHealthResponse, PipelineStatsResponse
 
 router = APIRouter(prefix="/stats", tags=["stats"])
@@ -61,3 +63,47 @@ async def mxik_health(db: AsyncSession = Depends(get_db)):
         active_records=active,
     )
     return ApiResponse(data=data.model_dump())
+
+
+@router.get("/quality", response_model=ApiResponse)
+async def quality_stats(
+    days: int = Query(30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """История метрик качества + текущее состояние обучения."""
+    # История из quality_stats
+    result = await db.execute(
+        select(QualityStat)
+        .order_by(QualityStat.period_date.desc())
+        .limit(days)
+    )
+    history = [
+        {
+            "period_date": s.period_date.isoformat(),
+            "total_products": s.total_products,
+            "with_brand": s.with_brand,
+            "with_mxik": s.with_mxik,
+            "auto_confirmed": s.auto_confirmed,
+            "review_queue_size": s.review_queue_size,
+            "avg_confidence": float(s.avg_confidence) if s.avg_confidence else None,
+        }
+        for s in result.scalars().all()
+    ]
+
+    # Статистика решений по типам
+    dec_result = await db.execute(
+        select(OperatorDecision.decision_type, func.count(OperatorDecision.id))
+        .group_by(OperatorDecision.decision_type)
+    )
+    decisions_by_type = {row[0]: row[1] for row in dec_result.all()}
+
+    # Количество выученных aliases (от operator)
+    learned_aliases = await db.scalar(
+        select(func.count(BrandAlias.id)).where(BrandAlias.source == "operator")
+    ) or 0
+
+    return ApiResponse(data={
+        "history": history,
+        "decisions_by_type": decisions_by_type,
+        "learned_aliases": learned_aliases,
+    })

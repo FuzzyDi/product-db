@@ -3,6 +3,19 @@ import { api } from '@/api/client';
 import type { MxikHealth, PipelineStats } from '@/types';
 import { pct } from '@/lib/utils';
 
+interface QualityStats {
+  decisions_by_type: Record<string, number>;
+  learned_aliases: number;
+  history: Array<{
+    period_date: string;
+    total_products: number;
+    with_brand: number;
+    with_mxik: number;
+    auto_confirmed: number;
+    avg_confidence: number | null;
+  }>;
+}
+
 function Metric({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
     <div className="bg-white rounded-lg border p-4">
@@ -40,8 +53,15 @@ export default function Dashboard() {
     refetchInterval: 60_000,
   });
 
+  const quality = useQuery({
+    queryKey: ['stats/quality'],
+    queryFn: () => api.get<QualityStats>('/stats/quality?days=7'),
+    refetchInterval: 120_000,
+  });
+
   const s = stats.data;
   const h = health.data;
+  const q = quality.data;
 
   return (
     <div className="p-6 max-w-4xl">
@@ -94,6 +114,32 @@ export default function Dashboard() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Learning stats */}
+      {q && (
+        <div className="bg-white rounded-lg border p-4 mb-4">
+          <div className="text-xs text-gray-500 mb-2">Обучение системы</div>
+          <div className="flex flex-wrap gap-6 text-sm">
+            <div>
+              <span className="text-gray-500">Выучено псевдонимов: </span>
+              <span className="font-semibold text-blue-600">{q.learned_aliases}</span>
+            </div>
+            {Object.entries(q.decisions_by_type).map(([type, count]) => (
+              <div key={type}>
+                <span className="text-gray-500">{type}: </span>
+                <span className="font-medium">{count}</span>
+              </div>
+            ))}
+          </div>
+          {q.history.length > 0 && (
+            <div className="mt-3 text-xs text-gray-400">
+              Последнее: {new Date(q.history[0].period_date).toLocaleDateString('ru')} —{' '}
+              {q.history[0].total_products.toLocaleString()} товаров,{' '}
+              ср. confidence {q.history[0].avg_confidence != null ? pct(q.history[0].avg_confidence) : '—'}
+            </div>
+          )}
+        </div>
       )}
 
       {/* MXIK health */}

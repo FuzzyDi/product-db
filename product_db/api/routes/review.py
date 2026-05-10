@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from product_db.db.session import get_db
 from product_db.models.db import MxikCatalog, OperatorDecision, Product
 from product_db.models.schemas import ApiResponse, ProductResponse
+from product_db.pipeline.learner import learn_from_decision
 
 router = APIRouter(prefix="/review", tags=["review"])
 
@@ -175,4 +176,10 @@ async def decide(
         )
 
     await db.commit()
+
+    # Обучаем систему на основе решения (синхронно, быстро)
+    await db.refresh(product)
+    await learn_from_decision(db, decision, product)
+    await db.commit()
+
     return ApiResponse(data={"decision_id": str(decision.id)})
