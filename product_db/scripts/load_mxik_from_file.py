@@ -81,7 +81,6 @@ def load(path: str, batch_size: int) -> None:
                 created_at_ms     = EXCLUDED.created_at_ms,
                 updated_at_ms     = EXCLUDED.updated_at_ms,
                 synced_at         = EXCLUDED.synced_at
-            WHERE mxik_catalog.updated_at_ms IS DISTINCT FROM EXCLUDED.updated_at_ms
             RETURNING id, mxik, (xmax = 0) AS was_inserted
         """
         rows = [
