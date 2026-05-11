@@ -37,7 +37,8 @@ def is_group_code(mxik: str) -> bool:
 
 
 def load(path: str, batch_size: int) -> None:
-    conn = psycopg2.connect(settings.database_url_sync)
+    dsn = settings.database_url_sync.replace("postgresql+psycopg2://", "postgresql://", 1)
+    conn = psycopg2.connect(dsn)
     conn.autocommit = False
     cur = conn.cursor()
 

@@ -42,7 +42,7 @@ async def intake_single(request: Request, req: ProductIntakeRequest, db: AsyncSe
 
 
 @router.post("/batch", response_model=ApiResponse)
-@limiter.limit("20/minute")
+@limiter.limit("120/minute")
 async def intake_batch(request: Request, req: BatchIntakeRequest):
     """Ставит товары в очередь Celery (асинхронно)."""
     task_ids = []

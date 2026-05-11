@@ -399,7 +399,8 @@ def seed(conn):
 
 
 def main():
-    conn = psycopg2.connect(settings.database_url_sync)
+    dsn = settings.database_url_sync.replace("postgresql+psycopg2://", "postgresql://", 1)
+    conn = psycopg2.connect(dsn)
     try:
         seed(conn)
         print("Справочники заполнены.")

@@ -8,6 +8,7 @@ from product_db.models.db import (
     BrandAlias, MxikCatalog, MxikSyncLog, OperatorDecision, Product, ProductBarcode, QualityStat,
 )
 from product_db.models.schemas import ApiResponse, MxikHealthResponse, PipelineStatsResponse
+from product_db.tasks.celery_app import app as celery_app
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -35,6 +36,15 @@ async def pipeline_stats(db: AsyncSession = Depends(get_db)):
         select(func.count(ProductBarcode.id.distinct()))
     ) or 0
 
+    from sqlalchemy import cast, Date
+    from datetime import date
+    certified_today = await db.scalar(
+        select(func.count(Product.product_id)).where(
+            Product.status == "certified",
+            cast(Product.updated_at, Date) == date.today(),
+        )
+    ) or 0
+
     data = PipelineStatsResponse(
         total_products=total,
         by_status=by_status,
@@ -42,6 +52,7 @@ async def pipeline_stats(db: AsyncSession = Depends(get_db)):
         with_brand=with_brand,
         with_mxik=with_mxik,
         with_barcode=with_barcode,
+        certified_today=certified_today,
     )
     return ApiResponse(data=data.model_dump())
 
@@ -102,8 +113,72 @@ async def quality_stats(
         select(func.count(BrandAlias.id)).where(BrandAlias.source == "operator")
     ) or 0
 
+    # Сертифицировано по дням (из operator_decisions)
+    certified_history_result = await db.execute(
+        text(
+            """
+            SELECT DATE(created_at AT TIME ZONE 'UTC') AS day, COUNT(*) AS cnt
+            FROM operator_decisions
+            WHERE decision_type = 'confirm_product'
+              AND created_at >= NOW() - (:days * INTERVAL '1 day')
+            GROUP BY day
+            ORDER BY day
+            """
+        ),
+        {"days": days},
+    )
+    certified_history = [
+        {"date": str(row.day), "count": row.cnt}
+        for row in certified_history_result.all()
+    ]
+
     return ApiResponse(data={
         "history": history,
         "decisions_by_type": decisions_by_type,
         "learned_aliases": learned_aliases,
+        "certified_history": certified_history,
+    })
+
+
+@router.get("/celery", response_model=ApiResponse)
+async def celery_health():
+    """Статус очереди Celery: ожидающие, активные, воркеры."""
+    import asyncio
+
+    # Кол-во задач в очереди Redis (неблокирующий запрос)
+    try:
+        from redis.asyncio import from_url as redis_from_url
+        from product_db.config import settings
+        redis = await redis_from_url(settings.redis_url)
+        pending = await redis.llen("celery")
+        await redis.aclose()
+    except Exception:
+        pending = None
+
+    # Активные и зарезервированные задачи через Celery inspect (с таймаутом)
+    active = 0
+    reserved = 0
+    workers: list[str] = []
+    try:
+        loop = asyncio.get_event_loop()
+        inspect = celery_app.control.inspect(timeout=1.5)
+
+        def _inspect():
+            a = inspect.active() or {}
+            r = inspect.reserved() or {}
+            return a, r
+
+        active_map, reserved_map = await loop.run_in_executor(None, _inspect)
+        workers = list(active_map.keys())
+        active = sum(len(v) for v in active_map.values())
+        reserved = sum(len(v) for v in reserved_map.values())
+    except Exception:
+        pass
+
+    return ApiResponse(data={
+        "pending": pending,
+        "active": active,
+        "reserved": reserved,
+        "workers": workers,
+        "worker_count": len(workers),
     })

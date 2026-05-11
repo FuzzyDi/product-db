@@ -18,20 +18,19 @@ async def _find_by_barcode(session: AsyncSession, barcode: str) -> MxikCatalog |
     return result.scalar_one_or_none()
 
 
-async def _find_by_text(session: AsyncSession, name: str) -> MxikCatalog | None:
-    """Поиск через PostgreSQL full-text search."""
-    # Простой вариант: tsquery из слов без стоп-слов
+async def _find_group_by_text(session: AsyncSession, name: str) -> MxikCatalog | None:
+    """Поиск группового ИКПУ через full-text search. Только is_group_code=true."""
     words = [w for w in name.split() if len(w) > 2]
     if not words:
         return None
-    query_str = " & ".join(words[:5])  # ограничиваем 5 словами
+    query_str = " | ".join(words[:5])
     result = await session.execute(
         text(
             """
             SELECT id FROM mxik_catalog
             WHERE search_vector @@ to_tsquery('russian', :q)
               AND is_active = true
-              AND is_group_code = false
+              AND is_group_code = true
             ORDER BY ts_rank(search_vector, to_tsquery('russian', :q)) DESC
             LIMIT 1
             """
@@ -68,13 +67,13 @@ async def run(ctx: PipelineContext, session: AsyncSession) -> PipelineContext:
         if mxik:
             confidence = Decimal("0.95")
 
-    # 2. По тексту (средняя уверенность)
+    # 2. По названию/классификации — только групповые коды (средняя уверенность)
     if mxik is None and ctx.name_normalized:
-        mxik = await _find_by_text(session, ctx.name_normalized)
+        mxik = await _find_group_by_text(session, ctx.name_normalized)
         if mxik:
-            confidence = Decimal("0.60")
+            confidence = Decimal("0.50")
 
-    # 3. Групповой код по типу товара (низкая уверенность)
+    # 3. Групповой код из маппинга product_type → mxik (низкая уверенность)
     if mxik is None and ctx.product_type_id:
         group_code, group_conf = await _find_group_code(session, ctx.product_type_id)
         if group_code:

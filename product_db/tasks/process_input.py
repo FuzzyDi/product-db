@@ -1,8 +1,9 @@
 """Celery задача: обработка одного входящего товара."""
 import asyncio
-import uuid
 
-from product_db.db.session import AsyncSessionLocal
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from product_db.config import settings
 from product_db.pipeline.processor import process
 from .celery_app import app
 
@@ -23,5 +24,11 @@ def process_input(self, *, source_id: str, source_type: str, payload: dict) -> d
 
 
 async def _run(*, source_id: str, source_type: str, payload: dict):
-    async with AsyncSessionLocal() as session:
-        return await process(session, source_id=source_id, source_type=source_type, payload=payload)
+    # Создаём свежий engine для каждой задачи — избегаем конфликтов event loop
+    engine = create_async_engine(settings.database_url, pool_size=1, max_overflow=0)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            return await process(session, source_id=source_id, source_type=source_type, payload=payload)
+    finally:
+        await engine.dispose()

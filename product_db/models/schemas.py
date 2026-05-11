@@ -47,15 +47,21 @@ class ProductResponse(BaseModel):
     product_id: uuid.UUID
     status: str
     name_raw: str | None
+    name_normalized: str | None = None
     name_canonical: str | None
+    name_uz_latn: str | None = None
     name_pos: str | None
     name_receipt: str | None
     brand_name: str | None
+    brand_id: int | None = None
+    subbrand: str | None = None
     product_type_id: int | None
+    category_id: int | None = None
     quantity_value: Decimal | None
     quantity_unit: str | None
     package_code: str | None
     mxik_code: str | None
+    mxik_package_code: int | None
     mxik_is_group_code: bool | None
     mxik_confidence: Decimal | None
     label_required: int | None
@@ -66,6 +72,7 @@ class ProductResponse(BaseModel):
     issues: list[str] | None
     review_required: bool
     review_reasons: list[str] | None
+    barcodes: list[str] = []
 
     model_config = {"from_attributes": True}
 
@@ -80,9 +87,13 @@ class ProductListResponse(BaseModel):
 class ProductUpdateRequest(BaseModel):
     """Обновление только безопасных полей."""
     name_canonical: str | None = Field(None, max_length=500)
+    name_uz_latn: str | None = Field(None, max_length=500)
     name_pos: str | None = Field(None, max_length=20)
     name_receipt: str | None = Field(None, max_length=40)
+    brand_name: str | None = Field(None, max_length=255)
+    product_type_id: int | None = None
     variant: str | None = None
+    subbrand: str | None = None
     package_code: str | None = None
     category_id: int | None = None
 
@@ -98,6 +109,7 @@ class PipelineStatsResponse(BaseModel):
     with_brand: int
     with_mxik: int
     with_barcode: int
+    certified_today: int = 0
 
 
 class MxikHealthResponse(BaseModel):

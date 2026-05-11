@@ -3,7 +3,17 @@ from celery.schedules import crontab
 
 from product_db.config import settings
 
-app = Celery("product_db", broker=settings.redis_url, backend=settings.redis_url)
+app = Celery(
+    "product_db",
+    broker=settings.redis_url,
+    backend=settings.redis_url,
+    include=[
+        "product_db.tasks.process_input",
+        "product_db.tasks.sync_mxik",
+        "product_db.tasks.quality_stats",
+        "product_db.tasks.learn",
+    ],
+)
 
 app.conf.update(
     task_serializer="json",
@@ -28,4 +38,3 @@ app.conf.beat_schedule = {
     },
 }
 
-app.autodiscover_tasks(["product_db.tasks"])

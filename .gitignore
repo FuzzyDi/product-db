@@ -15,3 +15,6 @@ frontend/.env.local
 data/
 *.xlsx
 *.csv
+celerybeat-schedule
+celerybeat-schedule.db
+frontend/package-lock.json

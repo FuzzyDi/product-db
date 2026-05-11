@@ -36,9 +36,9 @@ async def _find_by_fuzzy_name(
     result = await session.execute(
         text(
             """
-            SELECT product_id, similarity(name_canonical, :name) AS sim
+            SELECT product_id, similarity(name_normalized, :name) AS sim
             FROM products
-            WHERE name_canonical % :name
+            WHERE name_normalized % :name
             ORDER BY sim DESC
             LIMIT 1
             """

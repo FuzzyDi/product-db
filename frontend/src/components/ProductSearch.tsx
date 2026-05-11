@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { api } from '@/api/client';
 import type { Product } from '@/types';
@@ -25,6 +26,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 export default function ProductSearch() {
   const [query, setQuery] = useState('');
+  const navigate = useNavigate();
 
   const searchResult = useQuery({
     queryKey: ['products/search', query],
@@ -53,7 +55,7 @@ export default function ProductSearch() {
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Поиск по названию..."
+          placeholder="Поиск по названию, штрихкоду или ИКПУ..."
           className="w-full pl-9 pr-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
         />
       </div>
@@ -76,7 +78,11 @@ export default function ProductSearch() {
             </thead>
             <tbody className="divide-y">
               {items.map(p => (
-                <tr key={p.product_id} className="hover:bg-gray-50">
+                <tr
+                  key={p.product_id}
+                  className="hover:bg-gray-50 cursor-pointer"
+                  onClick={() => navigate(`/review/${p.product_id}`)}
+                >
                   <td className="px-3 py-2">
                     <div className="font-medium truncate max-w-sm">
                       {p.name_canonical ?? p.name_raw ?? '—'}

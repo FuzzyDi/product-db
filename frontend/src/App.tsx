@@ -1,6 +1,7 @@
 import { BrowserRouter, NavLink, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutDashboard, ListChecks, Search, Tag } from 'lucide-react';
+import { LayoutDashboard, ListChecks, Search, Tag, Upload, Layers } from 'lucide-react';
 import { api } from '@/api/client';
 import { useOperatorId } from '@/hooks/useOperatorId';
 import Dashboard from '@/components/Dashboard';
@@ -8,6 +9,8 @@ import ReviewQueue from '@/components/ReviewQueue';
 import ReviewDetail from '@/components/ReviewDetail';
 import ProductSearch from '@/components/ProductSearch';
 import BrandManager from '@/components/BrandManager';
+import CategoryManager from '@/components/CategoryManager';
+import XlsxImport from '@/components/XlsxImport';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 
@@ -26,6 +29,8 @@ function Layout() {
     { to: '/review', icon: ListChecks, label: 'Ревью', badge: stats?.review_queue_size },
     { to: '/products', icon: Search, label: 'Товары' },
     { to: '/refs/brands', icon: Tag, label: 'Бренды' },
+    { to: '/refs/categories', icon: Layers, label: 'Категории' },
+    { to: '/import', icon: Upload, label: 'Импорт XLSX' },
   ];
 
   return (
@@ -84,6 +89,7 @@ function Layout() {
 export default function App() {
   return (
     <BrowserRouter>
+      <Toaster position="bottom-right" richColors closeButton />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Dashboard />} />
@@ -91,6 +97,8 @@ export default function App() {
           <Route path="review/:id" element={<ReviewDetail />} />
           <Route path="products" element={<ProductSearch />} />
           <Route path="refs/brands" element={<BrandManager />} />
+          <Route path="refs/categories" element={<CategoryManager />} />
+          <Route path="import" element={<XlsxImport />} />
         </Route>
       </Routes>
     </BrowserRouter>

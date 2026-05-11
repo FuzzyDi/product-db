@@ -7,7 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from product_db.api.routes import intake, mxik, products, refs, review, stats
+from product_db.api.routes import admin, intake, mxik, products, refs, review, stats
 from product_db.config import settings
 from product_db.core.auth import require_api_key
 from product_db.core.logging_config import setup_logging
@@ -71,6 +71,7 @@ app.include_router(review.router,   prefix=API_PREFIX)
 app.include_router(mxik.router,     prefix=API_PREFIX)
 app.include_router(refs.router,     prefix=API_PREFIX)
 app.include_router(stats.router,    prefix=API_PREFIX)
+app.include_router(admin.router,    prefix=API_PREFIX)
 
 
 @app.exception_handler(Exception)

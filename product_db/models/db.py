@@ -165,6 +165,8 @@ class UOM(Base):
     id = Column(Integer, primary_key=True)
     code = Column(String(20), unique=True, nullable=False)  # ml, l, g, kg, pcs
     name_ru = Column(String(100))
+    name_uz_latn = Column(String(100))
+    name_uz_cyrl = Column(String(100))
     base_unit = Column(String(20))  # ml→l, g→kg
     factor = Column(Numeric(18, 6))  # 1ml = 0.001 l
 
@@ -193,6 +195,7 @@ class Product(Base):
     name_canonical = Column(Text)
     name_pos = Column(String(20))       # кассовый чек <=20
     name_receipt = Column(String(40))   # расширенный чек <=40
+    name_uz_latn = Column(Text)
     name_catalog = Column(Text)
     name_erp = Column(Text)
 

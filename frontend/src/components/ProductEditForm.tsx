@@ -1,4 +1,41 @@
-import type { Product } from '@/types';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@/api/client';
+import type { Brand, Product, ProductType } from '@/types';
+
+interface Category {
+  id: number;
+  name: string;
+  parent_id: number | null;
+}
+
+interface FlatOption {
+  id: number;
+  label: string;
+  depth: number;
+}
+
+function flattenCategories(categories: Category[]): FlatOption[] {
+  const map = new Map<number, Category & { children: Category[] }>();
+  categories.forEach(c => map.set(c.id, { ...c, children: [] }));
+  const roots: (Category & { children: Category[] })[] = [];
+  map.forEach(node => {
+    if (node.parent_id == null) roots.push(node);
+    else map.get(node.parent_id)?.children.push(node);
+  });
+  roots.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+  const result: FlatOption[] = [];
+  function walk(nodes: (Category & { children: Category[] })[], depth: number) {
+    nodes.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    for (const node of nodes) {
+      result.push({ id: node.id, label: '\u00a0\u00a0'.repeat(depth) + node.name, depth });
+      walk(node.children, depth + 1);
+    }
+  }
+  walk(roots, 0);
+  return result;
+}
 
 interface Props {
   product: Product;
@@ -56,13 +93,112 @@ function Field({
   );
 }
 
+function BrandCombobox({
+  value,
+  brandId,
+  onChange,
+}: {
+  value: string | null | undefined;
+  brandId: number | null | undefined;
+  onChange: (patch: { brand_name: string; brand_id: number | null }) => void;
+}) {
+  const [input, setInput] = useState(value ?? '');
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Синхронизируем input если prop изменился снаружи
+  useEffect(() => { setInput(value ?? ''); }, [value]);
+
+  const { data } = useQuery({
+    queryKey: ['refs/brands', q],
+    queryFn: () => api.get<Brand[]>(`/refs/brands${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+    enabled: open,
+    staleTime: 30_000,
+  });
+  const brands = Array.isArray(data) ? data : [];
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  function handleInput(v: string) {
+    setInput(v);
+    setQ(v);
+    onChange({ brand_name: v.toUpperCase(), brand_id: null });
+    setOpen(true);
+  }
+
+  function select(b: Brand) {
+    setInput(b.name_canonical);
+    onChange({ brand_name: b.name_canonical, brand_id: b.id });
+    setOpen(false);
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <label className="text-xs text-gray-500 mb-0.5 block">
+        Бренд
+        {brandId && <span className="ml-1 text-gray-300">#{brandId}</span>}
+      </label>
+      <input
+        value={input}
+        onChange={e => handleInput(e.target.value)}
+        onFocus={() => setOpen(true)}
+        placeholder="Введите или выберите..."
+        className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+      />
+      {open && brands.length > 0 && (
+        <div className="absolute z-20 top-full left-0 right-0 mt-0.5 bg-white border rounded shadow-lg max-h-48 overflow-y-auto">
+          {brands.slice(0, 10).map(b => (
+            <button
+              key={b.id}
+              onMouseDown={() => select(b)}
+              className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center justify-between"
+            >
+              <span className="font-medium">{b.name_canonical}</span>
+              <span className="text-xs text-gray-400">{b.aliases.length} алиасов</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ProductEditForm({ product, onChange }: Props) {
+  const { data: productTypes } = useQuery({
+    queryKey: ['refs/product-types'],
+    queryFn: () => api.get<ProductType[]>('/refs/product-types'),
+    staleTime: 60_000,
+  });
+
+  const { data: categoriesRaw } = useQuery({
+    queryKey: ['refs/categories'],
+    queryFn: () => api.get<Category[]>('/refs/categories'),
+    staleTime: 60_000,
+  });
+  const categoryOptions = flattenCategories(Array.isArray(categoriesRaw) ? categoriesRaw : []);
+
   return (
     <div className="space-y-3">
       <Field
-        label="Канонич. название"
+        label="Наименование (рус.)"
         value={product.name_canonical}
-        onChange={v => onChange({ name_canonical: v })}
+        onChange={v => onChange({
+          name_canonical: v,
+          name_pos: v.slice(0, 20),
+          name_receipt: v.slice(0, 40),
+        })}
+      />
+      <Field
+        label="Наименование (уз. лат.)"
+        value={product.name_uz_latn}
+        onChange={v => onChange({ name_uz_latn: v })}
       />
       <div className="grid grid-cols-2 gap-2">
         <Field
@@ -79,10 +215,45 @@ export default function ProductEditForm({ product, onChange }: Props) {
         />
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Field
-          label="Бренд"
+        <BrandCombobox
           value={product.brand_name}
-          onChange={v => onChange({ brand_name: v.toUpperCase() })}
+          brandId={product.brand_id}
+          onChange={patch => onChange(patch)}
+        />
+        <div>
+          <label className="text-xs text-gray-500 mb-0.5 block">Тип товара</label>
+          <select
+            value={product.product_type_id ?? ''}
+            onChange={e => onChange({ product_type_id: e.target.value ? Number(e.target.value) : null })}
+            className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+          >
+            <option value="">— не задан —</option>
+            {(Array.isArray(productTypes) ? productTypes : []).map(t => (
+              <option key={t.id} value={t.id}>{t.name_ru}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {categoryOptions.length > 0 && (
+        <div>
+          <label className="text-xs text-gray-500 mb-0.5 block">Категория</label>
+          <select
+            value={product.category_id ?? ''}
+            onChange={e => onChange({ category_id: e.target.value ? Number(e.target.value) : null })}
+            className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+          >
+            <option value="">— не задана —</option>
+            {categoryOptions.map(opt => (
+              <option key={opt.id} value={opt.id}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <Field
+          label="Суббренд"
+          value={product.subbrand ?? null}
+          onChange={v => onChange({ subbrand: v } as Partial<Product>)}
         />
         <Field
           label="Вариант"

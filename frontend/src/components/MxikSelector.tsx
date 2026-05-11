@@ -9,6 +9,7 @@ interface Props {
   selectedMxik: string | null;
   selectedPackageCode: number | null;
   onSelect: (mxik: string, packageCode: number | null) => void;
+  barcode?: string | null;
 }
 
 const PACKAGE_TYPE_LABEL: Record<number, string> = {
@@ -23,7 +24,7 @@ const CASH_SALE_LABEL: Record<number, string> = {
   2: 'частично',
 };
 
-export default function MxikSelector({ selectedMxik, selectedPackageCode, onSelect }: Props) {
+export default function MxikSelector({ selectedMxik, selectedPackageCode, onSelect, barcode }: Props) {
   const [query, setQuery] = useState('');
   const [chosenMxik, setChosenMxik] = useState<MxikItem | null>(null);
 
@@ -34,24 +35,27 @@ export default function MxikSelector({ selectedMxik, selectedPackageCode, onSele
     enabled: query.length >= 2,
   });
 
+  const activeMxik = chosenMxik?.mxik ?? selectedMxik;
+
   const packagesQuery = useQuery({
-    queryKey: ['mxik/packages', chosenMxik?.mxik],
+    queryKey: ['mxik/packages', activeMxik],
     queryFn: () =>
       api.get<{ mxik: string; packages: MxikPackage[] }>(
-        `/mxik/${chosenMxik?.mxik}/packages`,
+        `/mxik/${activeMxik}/packages`,
       ),
-    enabled: !!chosenMxik,
+    enabled: !!activeMxik,
   });
 
   function handleSelectMxik(item: MxikItem) {
     setChosenMxik(item);
-    if (!packagesQuery.data?.packages?.length) {
-      onSelect(item.mxik, null);
-    }
+    // Сохраняем сразу с null package_code — пакейдж уточняется отдельно
+    onSelect(item.mxik, null);
   }
 
   function handleSelectPackage(code: number) {
-    onSelect(chosenMxik!.mxik, code);
+    const mxik = chosenMxik?.mxik ?? selectedMxik;
+    if (!mxik) return;
+    onSelect(mxik, code);
   }
 
   return (
@@ -73,14 +77,25 @@ export default function MxikSelector({ selectedMxik, selectedPackageCode, onSele
       )}
 
       {/* Search */}
-      <div className="relative">
-        <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Поиск ИКПУ по названию или штрихкоду..."
-          className="w-full pl-7 pr-3 py-1.5 border rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-        />
+      <div className="flex gap-1">
+        <div className="relative flex-1">
+          <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Поиск по названию или штрихкоду..."
+            className="w-full pl-7 pr-3 py-1.5 border rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+          />
+        </div>
+        {barcode && (
+          <button
+            onClick={() => setQuery(barcode)}
+            className="px-2 py-1.5 border rounded text-xs text-blue-600 hover:bg-blue-50 whitespace-nowrap"
+            title={`Найти по штрихкоду ${barcode}`}
+          >
+            По ШК
+          </button>
+        )}
       </div>
 
       {/* Results */}
@@ -116,7 +131,7 @@ export default function MxikSelector({ selectedMxik, selectedPackageCode, onSele
       )}
 
       {/* Package selection */}
-      {chosenMxik && packagesQuery.data?.packages && packagesQuery.data.packages.length > 0 && (
+      {activeMxik && packagesQuery.data?.packages && packagesQuery.data.packages.length > 0 && (
         <div>
           <div className="text-xs text-gray-500 mb-1">Выберите упаковку:</div>
           <div className="grid grid-cols-2 gap-1">

@@ -2,12 +2,16 @@ export interface Product {
   product_id: string;
   status: string;
   name_raw: string | null;
+  name_normalized: string | null;
   name_canonical: string | null;
+  name_uz_latn: string | null;
   name_pos: string | null;
   name_receipt: string | null;
   brand_name: string | null;
   brand_id: number | null;
+  subbrand: string | null;
   product_type_id: number | null;
+  category_id: number | null;
   quantity_value: string | null;
   quantity_unit: string | null;
   package_code: string | null;
@@ -23,6 +27,7 @@ export interface Product {
   issues: string[] | null;
   review_required: boolean;
   review_reasons: string[] | null;
+  barcodes: string[];
 }
 
 export interface MxikItem {
@@ -47,6 +52,7 @@ export interface Brand {
   id: number;
   name_canonical: string;
   manufacturer_id: number | null;
+  aliases: string[];
 }
 
 export interface ProductType {
@@ -63,6 +69,7 @@ export interface PipelineStats {
   with_brand: number;
   with_mxik: number;
   with_barcode: number;
+  certified_today: number;
 }
 
 export interface MxikHealth {

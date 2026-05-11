@@ -7,8 +7,9 @@ export default defineConfig({
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   server: {
     port: 3000,
+    watch: { usePolling: true, interval: 500 },
     proxy: {
-      '/api': { target: 'http://localhost:8000', changeOrigin: true },
+      '/api': { target: process.env.API_TARGET || 'http://backend:8000', changeOrigin: true },
     },
   },
 });

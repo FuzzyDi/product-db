@@ -3,13 +3,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from product_db.db.session import get_db
-from product_db.models.db import MxikCatalog, OperatorDecision, Product
+from product_db.models.db import ExternalCode, MxikCatalog, OperatorDecision, Product, ProductBarcode
 from product_db.models.schemas import ApiResponse, ProductResponse
 from product_db.pipeline.learner import learn_from_decision
+from product_db.pipeline.quality import _CONFIDENCE_PENALTIES, _COMPLETENESS_PENALTIES
 
 router = APIRouter(prefix="/review", tags=["review"])
 
@@ -21,31 +22,143 @@ class DecideRequest(BaseModel):
     comment: str | None = None
 
 
+class BatchDecideRequest(BaseModel):
+    product_ids: list[str]
+    decision_type: str  # confirm_product | dismiss
+
+
+@router.post("/batch", response_model=ApiResponse)
+async def batch_decide(
+    req: BatchDecideRequest,
+    x_operator_id: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Массовые решения: confirm_product или dismiss (убрать из очереди)."""
+    if not req.product_ids:
+        return ApiResponse(data={"processed": 0})
+
+    ids = [uuid.UUID(pid) for pid in req.product_ids]
+
+    if req.decision_type == "dismiss":
+        await db.execute(
+            update(Product)
+            .where(Product.product_id.in_(ids))
+            .values(review_required=False)
+        )
+        for pid in ids:
+            db.add(OperatorDecision(
+                product_id=pid,
+                operator_id=x_operator_id,
+                decision_type="dismiss",
+            ))
+    elif req.decision_type == "confirm_product":
+        result = await db.execute(select(Product).where(Product.product_id.in_(ids)))
+        products = result.scalars().all()
+        for product in products:
+            clean_issues = product.issues or []
+            if product.brand_id or product.brand_name:
+                clean_issues = [i for i in clean_issues if i != "MISSING_BRAND"]
+            if product.product_type_id:
+                clean_issues = [i for i in clean_issues if i != "MISSING_PRODUCT_TYPE"]
+            if product.mxik_code:
+                clean_issues = [i for i in clean_issues if i not in ("MISSING_MXIK", "MXIK_GROUP_CODE")]
+            confidence = round(max(0.0, 1.0 - sum(_CONFIDENCE_PENALTIES.get(i, 0) for i in clean_issues)), 3)
+            completeness = round(max(0.0, 1.0 - sum(_COMPLETENESS_PENALTIES.get(i, 0) for i in clean_issues)), 3)
+            await db.execute(
+                update(Product)
+                .where(Product.product_id == product.product_id)
+                .values(
+                    status="certified",
+                    review_required=False,
+                    issues=clean_issues,
+                    confidence_score=confidence,
+                    completeness_score=completeness,
+                )
+            )
+            db.add(OperatorDecision(
+                product_id=product.product_id,
+                operator_id=x_operator_id,
+                decision_type="confirm_product",
+            ))
+
+    await db.commit()
+    return ApiResponse(data={"processed": len(ids)})
+
+
+_SORT_COLUMNS = {
+    "confidence": Product.confidence_score,
+    "name": Product.name_canonical,
+    "brand": Product.brand_name,
+    "created": Product.created_at,
+}
+
+
 @router.get("/queue", response_model=ApiResponse)
 async def review_queue(
     offset: int = 0,
     limit: int = 50,
+    sort_by: str = "confidence",
+    sort_dir: str = "asc",
+    product_type_id: int | None = None,
+    category_id: int | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Очередь товаров на ревью, отсортированная по confidence ASC."""
+    """Очередь товаров на ревью."""
     from sqlalchemy import func
+    base_where = [Product.review_required.is_(True), Product.status != "merged"]
+    if product_type_id:
+        base_where.append(Product.product_type_id == product_type_id)
+    if category_id:
+        base_where.append(Product.category_id == category_id)
+
     total = await db.scalar(
-        select(func.count(Product.product_id)).where(Product.review_required.is_(True))
+        select(func.count(Product.product_id)).where(*base_where)
     )
+    col = _SORT_COLUMNS.get(sort_by, Product.confidence_score)
+    order = col.asc() if sort_dir != "desc" else col.desc()
     result = await db.execute(
         select(Product)
-        .where(Product.review_required.is_(True))
-        .order_by(Product.confidence_score.asc(), Product.created_at.asc())
+        .where(*base_where)
+        .order_by(order, Product.created_at.asc())
         .offset(offset)
         .limit(limit)
     )
     items = result.scalars().all()
+    items_data = []
+    for p in items:
+        d = {k: v for k, v in p.__dict__.items() if not k.startswith('_')}
+        d['barcodes'] = []
+        items_data.append(ProductResponse.model_validate(d).model_dump())
     return ApiResponse(data={
-        "items": [ProductResponse.model_validate(p).model_dump() for p in items],
+        "items": items_data,
         "total": total or 0,
         "offset": offset,
         "limit": limit,
     })
+
+
+@router.get("/{product_id}/decisions", response_model=ApiResponse)
+async def product_decisions(product_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """История решений оператора по товару."""
+    result = await db.execute(
+        select(OperatorDecision)
+        .where(OperatorDecision.product_id == product_id)
+        .order_by(OperatorDecision.created_at.desc())
+        .limit(50)
+    )
+    decisions = result.scalars().all()
+    return ApiResponse(data=[
+        {
+            "id": str(d.id),
+            "operator_id": d.operator_id,
+            "decision_type": d.decision_type,
+            "field_name": d.field_name,
+            "new_value": d.new_value,
+            "comment": d.comment,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        }
+        for d in decisions
+    ])
 
 
 @router.get("/{product_id}", response_model=ApiResponse)
@@ -97,8 +210,15 @@ async def review_detail(product_id: uuid.UUID, db: AsyncSession = Depends(get_db
         )
         similar = [dict(r) for r in sim_result.mappings().all()]
 
+    bc_result = await db.execute(
+        select(ProductBarcode.barcode).where(ProductBarcode.product_id == product_id)
+    )
+    barcodes = [row.barcode for row in bc_result.all()]
+    product_dict = {k: v for k, v in product.__dict__.items() if not k.startswith('_')}
+    product_dict['barcodes'] = barcodes
+
     return ApiResponse(data={
-        "product": ProductResponse.model_validate(product).model_dump(),
+        "product": ProductResponse.model_validate(product_dict).model_dump(),
         "mxik_candidates": mxik_candidates,
         "similar_products": similar,
     })
@@ -140,10 +260,26 @@ async def decide(
     }
 
     if req.decision_type == "confirm_product":
+        # Убираем ишью которые больше не актуальны
+        clean_issues = product.issues or []
+        if product.brand_id or product.brand_name:
+            clean_issues = [i for i in clean_issues if i != "MISSING_BRAND"]
+        if product.product_type_id:
+            clean_issues = [i for i in clean_issues if i != "MISSING_PRODUCT_TYPE"]
+        if product.mxik_code:
+            clean_issues = [i for i in clean_issues if i not in ("MISSING_MXIK", "MXIK_GROUP_CODE")]
+        confidence = round(max(0.0, 1.0 - sum(_CONFIDENCE_PENALTIES.get(i, 0) for i in clean_issues)), 3)
+        completeness = round(max(0.0, 1.0 - sum(_COMPLETENESS_PENALTIES.get(i, 0) for i in clean_issues)), 3)
         await db.execute(
             update(Product)
             .where(Product.product_id == product_id)
-            .values(status="certified", review_required=False)
+            .values(
+                status="certified",
+                review_required=False,
+                issues=clean_issues,
+                confidence_score=confidence,
+                completeness_score=completeness,
+            )
         )
     elif req.decision_type == "correct_field" and req.field_name and req.new_value:
         if req.field_name in _SAFE_FIELDS:
@@ -163,10 +299,44 @@ async def decide(
             )
     elif req.decision_type in ("confirm_mxik", "confirm_package_code"):
         if req.new_value:
+            values = dict(req.new_value)
+            # Подтягиваем фискальные поля из каталога ИКПУ
+            mxik_code = values.get("mxik_code")
+            if mxik_code:
+                mxik_row = await db.execute(
+                    select(MxikCatalog).where(MxikCatalog.mxik == mxik_code)
+                )
+                mxik_obj = mxik_row.scalar_one_or_none()
+                if mxik_obj:
+                    values["label_required"] = mxik_obj.label
+                    values["label_for_check"] = mxik_obj.label_for_check
+                    values["cash_sale"] = mxik_obj.cash_sale
+                    values["mxik_is_group_code"] = mxik_obj.is_group_code
             await db.execute(
                 update(Product)
                 .where(Product.product_id == product_id)
-                .values(**req.new_value)
+                .values(**values)
+            )
+    elif req.decision_type == "merge_products":
+        if req.new_value and req.new_value.get("target_product_id"):
+            target_id = uuid.UUID(req.new_value["target_product_id"])
+            # Переносим штрихкоды на целевой товар
+            await db.execute(
+                update(ProductBarcode)
+                .where(ProductBarcode.product_id == product_id)
+                .values(product_id=target_id)
+            )
+            # Переносим внешние коды
+            await db.execute(
+                update(ExternalCode)
+                .where(ExternalCode.product_id == product_id)
+                .values(product_id=target_id)
+            )
+            # Помечаем дубль как слитый, убираем из очереди
+            await db.execute(
+                update(Product)
+                .where(Product.product_id == product_id)
+                .values(status="merged", review_required=False)
             )
     elif req.decision_type == "reject_match":
         await db.execute(

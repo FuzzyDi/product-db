@@ -69,6 +69,8 @@ services:
       context: ./frontend
     ports:
       - "3000:3000"
+    environment:
+      - API_TARGET=http://backend:8000
     volumes:
       - ./frontend:/app
       - /app/node_modules
