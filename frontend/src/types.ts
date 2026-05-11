@@ -69,6 +69,8 @@ export interface PipelineStats {
   with_brand: number;
   with_mxik: number;
   with_barcode: number;
+  with_category: number;
+  with_type: number;
   certified_today: number;
 }
 

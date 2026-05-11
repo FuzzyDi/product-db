@@ -7,7 +7,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from product_db.db.session import get_db
-from product_db.models.db import ExternalCode, MxikCatalog, OperatorDecision, Product, ProductBarcode
+from product_db.models.db import ExternalCode, MxikCatalog, OperatorDecision, Product, ProductBarcode, ProductTypeMxikMap
 from product_db.models.schemas import ApiResponse, ProductResponse
 from product_db.pipeline.learner import learn_from_decision
 from product_db.pipeline.quality import _CONFIDENCE_PENALTIES, _COMPLETENESS_PENALTIES
@@ -134,6 +134,8 @@ async def review_queue(
     sort_dir: str = "asc",
     product_type_id: int | None = None,
     category_id: int | None = None,
+    no_category: bool = False,
+    no_type: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """Очередь товаров на ревью."""
@@ -143,6 +145,10 @@ async def review_queue(
         base_where.append(Product.product_type_id == product_type_id)
     if category_id:
         base_where.append(Product.category_id == category_id)
+    if no_category:
+        base_where.append(Product.category_id.is_(None))
+    if no_type:
+        base_where.append(Product.product_type_id.is_(None))
 
     total = await db.scalar(
         select(func.count(Product.product_id)).where(*base_where)
@@ -383,6 +389,32 @@ async def decide(
     # Обучаем систему на основе решения (синхронно, быстро)
     await db.refresh(product)
     await learn_from_decision(db, decision, product)
+
+    # Обновляем карту MXIK если подтверждён товар с типом и конкретным ИКПУ
+    if req.decision_type == "confirm_product" and product.product_type_id and product.mxik_code:
+        mxik_obj = await db.scalar(
+            select(MxikCatalog).where(MxikCatalog.mxik == product.mxik_code)
+        )
+        if mxik_obj:
+            group_code = product.mxik_code if mxik_obj.is_group_code else product.mxik_code[:8] + "000000"
+            # Ищем существующую запись в карте
+            existing = await db.scalar(
+                select(ProductTypeMxikMap).where(
+                    ProductTypeMxikMap.product_type_id == product.product_type_id
+                )
+            )
+            if existing:
+                # Обновляем только если новый код надёжнее (не группа > группа)
+                if not mxik_obj.is_group_code:
+                    existing.mxik_group_code = group_code
+                    existing.confidence = min(float(existing.confidence or 0.5) + 0.05, 1.0)
+            else:
+                db.add(ProductTypeMxikMap(
+                    product_type_id=product.product_type_id,
+                    mxik_group_code=group_code,
+                    confidence=0.7,
+                ))
+
     await db.commit()
 
     return ApiResponse(data={"decision_id": str(decision.id)})

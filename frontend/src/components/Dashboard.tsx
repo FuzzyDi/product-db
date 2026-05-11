@@ -331,7 +331,7 @@ export default function Dashboard() {
 
       {s && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
             <Metric label="Всего товаров" value={s.total_products.toLocaleString()} />
             <Metric
               label="На ревью"
@@ -347,6 +347,16 @@ export default function Dashboard() {
               label="С ИКПУ"
               value={pct(s.total_products ? s.with_mxik / s.total_products : 0)}
               sub={`${s.with_mxik.toLocaleString()} товаров`}
+            />
+            <Metric
+              label="С категорией"
+              value={pct(s.total_products ? (s.with_category ?? 0) / s.total_products : 0)}
+              sub={`${(s.with_category ?? 0).toLocaleString()} товаров`}
+            />
+            <Metric
+              label="С типом"
+              value={pct(s.total_products ? (s.with_type ?? 0) / s.total_products : 0)}
+              sub={`${(s.with_type ?? 0).toLocaleString()} товаров`}
             />
             <Metric
               label="Сертифицировано сегодня"

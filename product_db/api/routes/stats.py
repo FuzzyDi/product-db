@@ -35,6 +35,12 @@ async def pipeline_stats(db: AsyncSession = Depends(get_db)):
     with_barcode = await db.scalar(
         select(func.count(ProductBarcode.id.distinct()))
     ) or 0
+    with_category = await db.scalar(
+        select(func.count(Product.product_id)).where(Product.category_id.isnot(None))
+    ) or 0
+    with_type = await db.scalar(
+        select(func.count(Product.product_id)).where(Product.product_type_id.isnot(None))
+    ) or 0
 
     from sqlalchemy import cast, Date
     from datetime import date
@@ -52,6 +58,8 @@ async def pipeline_stats(db: AsyncSession = Depends(get_db)):
         with_brand=with_brand,
         with_mxik=with_mxik,
         with_barcode=with_barcode,
+        with_category=with_category,
+        with_type=with_type,
         certified_today=certified_today,
     )
     return ApiResponse(data=data.model_dump())

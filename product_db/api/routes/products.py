@@ -101,6 +101,43 @@ async def search_products(
     return ApiResponse(data={"items": [i.model_dump() for i in items], "count": len(items)})
 
 
+@router.get("/duplicates", response_model=ApiResponse)
+async def find_duplicates(
+    threshold: float = Query(0.85, ge=0.5, le=1.0),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Пары товаров с похожими названиями (similarity >= threshold)."""
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                a.product_id::text AS id_a,
+                a.name_canonical    AS name_a,
+                a.brand_name        AS brand_a,
+                a.status            AS status_a,
+                b.product_id::text AS id_b,
+                b.name_canonical    AS name_b,
+                b.brand_name        AS brand_b,
+                b.status            AS status_b,
+                similarity(a.name_canonical, b.name_canonical) AS sim
+            FROM products a
+            JOIN products b ON b.product_id > a.product_id
+            WHERE a.name_canonical IS NOT NULL
+              AND b.name_canonical IS NOT NULL
+              AND a.status != 'merged'
+              AND b.status != 'merged'
+              AND similarity(a.name_canonical, b.name_canonical) >= :threshold
+            ORDER BY sim DESC
+            LIMIT :limit
+            """
+        ),
+        {"threshold": threshold, "limit": limit},
+    )
+    pairs = [dict(r) for r in result.mappings().all()]
+    return ApiResponse(data={"pairs": pairs, "count": len(pairs)})
+
+
 @router.get("/export/xlsx")
 async def export_xlsx(
     status: str = Query("certified"),
@@ -135,6 +172,7 @@ async def export_xlsx(
         ("name_canonical",    "Канонич. название"),
         ("name_pos",          "POS (≤20)"),
         ("name_receipt",      "Чек (≤40)"),
+        ("name_uz_latn",      "Наименование (уз. лат.)"),
         ("brand_name",        "Бренд"),
         ("variant",           "Вариант"),
         ("quantity_value",    "Кол-во"),

@@ -109,6 +109,8 @@ class PipelineStatsResponse(BaseModel):
     with_brand: int
     with_mxik: int
     with_barcode: int
+    with_category: int = 0
+    with_type: int = 0
     certified_today: int = 0
 
 

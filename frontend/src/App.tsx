@@ -1,7 +1,7 @@
 import { BrowserRouter, NavLink, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutDashboard, ListChecks, Search, Tag, Upload, Layers } from 'lucide-react';
+import { LayoutDashboard, ListChecks, Search, Tag, Upload, Layers, GitMerge } from 'lucide-react';
 import { api } from '@/api/client';
 import { useOperatorId } from '@/hooks/useOperatorId';
 import Dashboard from '@/components/Dashboard';
@@ -11,6 +11,7 @@ import ProductSearch from '@/components/ProductSearch';
 import BrandManager from '@/components/BrandManager';
 import CategoryManager from '@/components/CategoryManager';
 import XlsxImport from '@/components/XlsxImport';
+import DuplicatesReport from '@/components/DuplicatesReport';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 
@@ -31,6 +32,7 @@ function Layout() {
     { to: '/refs/brands', icon: Tag, label: 'Бренды' },
     { to: '/refs/categories', icon: Layers, label: 'Категории' },
     { to: '/import', icon: Upload, label: 'Импорт XLSX' },
+    { to: '/duplicates', icon: GitMerge, label: 'Дубли' },
   ];
 
   return (
@@ -99,6 +101,7 @@ export default function App() {
           <Route path="refs/brands" element={<BrandManager />} />
           <Route path="refs/categories" element={<CategoryManager />} />
           <Route path="import" element={<XlsxImport />} />
+          <Route path="duplicates" element={<DuplicatesReport />} />
         </Route>
       </Routes>
     </BrowserRouter>

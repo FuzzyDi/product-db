@@ -52,6 +52,8 @@ export default function ReviewQueue() {
   const [brandFilter, setBrandFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState<number | ''>('');
   const [categoryFilter, setCategoryFilter] = useState<number | ''>('');
+  const [noType, setNoType] = useState(false);
+  const [noCategory, setNoCategory] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batching, setBatching] = useState(false);
   const [focusedIdx, setFocusedIdx] = useState(0);
@@ -89,9 +91,11 @@ export default function ReviewQueue() {
 
   const typeParam = typeFilter ? `&product_type_id=${typeFilter}` : '';
   const catParam = categoryFilter ? `&category_id=${categoryFilter}` : '';
+  const noTypeParam = noType ? '&no_type=true' : '';
+  const noCatParam = noCategory ? '&no_category=true' : '';
   const { data, isLoading } = useQuery({
-    queryKey: ['review/queue', page, sortBy, sortDir, typeFilter, categoryFilter],
-    queryFn: () => api.get<QueueData>(`/review/queue?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&sort_by=${sortBy}&sort_dir=${sortDir}${typeParam}${catParam}`),
+    queryKey: ['review/queue', page, sortBy, sortDir, typeFilter, categoryFilter, noType, noCategory],
+    queryFn: () => api.get<QueueData>(`/review/queue?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&sort_by=${sortBy}&sort_dir=${sortDir}${typeParam}${catParam}${noTypeParam}${noCatParam}`),
     refetchInterval: 15_000,
   });
 
@@ -263,6 +267,24 @@ export default function ReviewQueue() {
             ))}
           </select>
         )}
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={noType}
+            onChange={e => { setNoType(e.target.checked); setPage(0); setFocusedIdx(0); }}
+            className="rounded"
+          />
+          Без типа
+        </label>
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={noCategory}
+            onChange={e => { setNoCategory(e.target.checked); setPage(0); setFocusedIdx(0); }}
+            className="rounded"
+          />
+          Без категории
+        </label>
       </div>
 
       {selected.size > 0 && (
