@@ -164,20 +164,19 @@ export default function ReviewQueue() {
     setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
   }
 
-  async function batchAction(decision_type: 'confirm_product' | 'dismiss') {
+  async function batchAction(decision_type: string, value?: number) {
     if (!operatorId || batching || selected.size === 0) return;
     const count = selected.size;
     setBatching(true);
     try {
-      await api.post('/review/batch', { product_ids: [...selected], decision_type }, operatorId);
+      await api.post('/review/batch', { product_ids: [...selected], decision_type, value: value ?? null }, operatorId);
       setSelected(new Set());
       qc.invalidateQueries({ queryKey: ['review/queue'] });
       qc.invalidateQueries({ queryKey: ['stats/pipeline'] });
-      if (decision_type === 'confirm_product') {
-        toast.success(`Подтверждено: ${count} товаров`);
-      } else {
-        toast.info(`Убрано из очереди: ${count} товаров`);
-      }
+      if (decision_type === 'confirm_product') toast.success(`Подтверждено: ${count} товаров`);
+      else if (decision_type === 'dismiss') toast.info(`Убрано из очереди: ${count} товаров`);
+      else if (decision_type === 'set_type') toast.success(`Тип назначен: ${count} товаров`);
+      else if (decision_type === 'set_category') toast.success(`Категория назначена: ${count} товаров`);
     } catch {
       toast.error('Ошибка при выполнении операции');
     } finally {
@@ -283,6 +282,29 @@ export default function ReviewQueue() {
           >
             <X size={12} /> Убрать из очереди
           </button>
+          <span className="w-px h-4 bg-blue-200 mx-1" />
+          <select
+            defaultValue=""
+            onChange={e => { if (e.target.value) { batchAction('set_type', Number(e.target.value)); e.target.value = ''; } }}
+            disabled={batching || !operatorId}
+            className="border border-blue-300 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50 max-w-36"
+          >
+            <option value="">Назначить тип...</option>
+            {(Array.isArray(productTypes) ? productTypes : []).map(t => (
+              <option key={t.id} value={t.id}>{t.name_ru}</option>
+            ))}
+          </select>
+          <select
+            defaultValue=""
+            onChange={e => { if (e.target.value) { batchAction('set_category', Number(e.target.value)); e.target.value = ''; } }}
+            disabled={batching || !operatorId}
+            className="border border-blue-300 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50 max-w-36"
+          >
+            <option value="">Назначить категорию...</option>
+            {categoryOptions.map(c => (
+              <option key={c.id} value={c.id}>{c.label}</option>
+            ))}
+          </select>
           <button
             onClick={() => setSelected(new Set())}
             className="ml-auto text-xs text-gray-500 hover:text-gray-700"

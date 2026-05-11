@@ -24,7 +24,8 @@ class DecideRequest(BaseModel):
 
 class BatchDecideRequest(BaseModel):
     product_ids: list[str]
-    decision_type: str  # confirm_product | dismiss
+    decision_type: str  # confirm_product | dismiss | set_type | set_category
+    value: int | None = None  # product_type_id или category_id для set_type/set_category
 
 
 @router.post("/batch", response_model=ApiResponse)
@@ -79,6 +80,38 @@ async def batch_decide(
                 product_id=product.product_id,
                 operator_id=x_operator_id,
                 decision_type="confirm_product",
+            ))
+
+    elif req.decision_type == "set_type" and req.value is not None:
+        await db.execute(
+            update(Product)
+            .where(Product.product_id.in_(ids))
+            .values(
+                product_type_id=req.value,
+                issues=func.array_remove(Product.issues, "MISSING_PRODUCT_TYPE"),
+            )
+        )
+        for pid in ids:
+            db.add(OperatorDecision(
+                product_id=pid,
+                operator_id=x_operator_id,
+                decision_type="correct_field",
+                field_name="product_type_id",
+                new_value={"product_type_id": req.value},
+            ))
+    elif req.decision_type == "set_category" and req.value is not None:
+        await db.execute(
+            update(Product)
+            .where(Product.product_id.in_(ids))
+            .values(category_id=req.value)
+        )
+        for pid in ids:
+            db.add(OperatorDecision(
+                product_id=pid,
+                operator_id=x_operator_id,
+                decision_type="correct_field",
+                field_name="category_id",
+                new_value={"category_id": req.value},
             ))
 
     await db.commit()

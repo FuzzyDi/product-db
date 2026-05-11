@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
@@ -67,6 +67,76 @@ function CertifiedChart({ data }: { data: Array<{ date: string; count: number }>
           );
         })}
       </svg>
+    </div>
+  );
+}
+
+function MxikMapPanel() {
+  const qc = useQueryClient();
+  const [building, setBuilding] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function buildMap() {
+    setBuilding(true);
+    setResult(null);
+    try {
+      const data = await api.post<{ mapped: number; total_source_types?: number; message?: string }>(
+        '/admin/build-mxik-map', {}
+      );
+      const msg = data.message ?? `Построено ${data.mapped} маппингов`;
+      setResult(msg);
+      toast.success(msg);
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Ошибка');
+    } finally {
+      setBuilding(false);
+    }
+  }
+
+  async function applyMap() {
+    setApplying(true);
+    setResult(null);
+    try {
+      const data = await api.post<{ applied: number; message?: string }>(
+        '/admin/apply-mxik-map', {}
+      );
+      const msg = data.message ?? `Назначено ИКПУ: ${data.applied} товаров`;
+      setResult(msg);
+      toast.success(msg);
+      qc.invalidateQueries({ queryKey: ['stats/pipeline'] });
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Ошибка');
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-lg border p-4 mb-4">
+      <div className="text-xs text-gray-500 mb-1">Авто-ИКПУ по типу товара</div>
+      <div className="text-xs text-gray-400 mb-3">
+        Шаг 1: построить карту из certified товаров. Шаг 2: назначить групповые коды товарам без ИКПУ.
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={buildMap}
+          disabled={building || applying}
+          className="flex items-center gap-1.5 px-3 py-1.5 border rounded text-sm hover:bg-gray-50 disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={building ? 'animate-spin' : ''} />
+          {building ? 'Строим...' : 'Построить карту'}
+        </button>
+        <button
+          onClick={applyMap}
+          disabled={building || applying}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={applying ? 'animate-spin' : ''} />
+          {applying ? 'Назначаем...' : 'Назначить ИКПУ'}
+        </button>
+        {result && <span className="text-xs text-gray-500">{result}</span>}
+      </div>
     </div>
   );
 }
@@ -276,6 +346,9 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* Auto-MXIK */}
+      <MxikMapPanel />
 
       {/* Export */}
       <div className="bg-white rounded-lg border p-4 mb-4">
