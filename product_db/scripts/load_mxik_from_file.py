@@ -218,7 +218,7 @@ def load(path: str, batch_size: int) -> None:
         )
         conn.commit()
         logger.exception("Ошибка загрузки MXIK: %s", exc)
-        sys.exit(1)
+        raise
     finally:
         cur.close()
         conn.close()

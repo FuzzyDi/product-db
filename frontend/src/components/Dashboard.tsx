@@ -71,6 +71,103 @@ function CertifiedChart({ data }: { data: Array<{ date: string; count: number }>
   );
 }
 
+interface SyncMxikState {
+  running: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+  downloaded_mb: number | null;
+  result: string | null;
+  error: string | null;
+}
+
+function MxikSyncPanel({ health, onSynced }: { health: MxikHealth | undefined; onSynced: () => void }) {
+  const qc = useQueryClient();
+  const syncState = useQuery({
+    queryKey: ['admin/sync-mxik'],
+    queryFn: () => api.get<SyncMxikState>('/admin/sync-mxik'),
+    refetchInterval: q => (q.state.data as SyncMxikState | undefined)?.running ? 3000 : false,
+  });
+
+  const syncWasRunning = useRef(false);
+  useEffect(() => {
+    const s = syncState.data;
+    if (s?.running) { syncWasRunning.current = true; }
+    if (syncWasRunning.current && s && !s.running) {
+      syncWasRunning.current = false;
+      if (s.result === 'ok') {
+        toast.success('Реестр ИКПУ обновлён');
+        onSynced();
+      } else if (s.error) {
+        toast.error(`Ошибка синхронизации: ${s.error}`);
+      }
+    }
+  }, [syncState.data?.running, syncState.data?.finished_at]);
+
+  async function startSync() {
+    try {
+      await api.post('/admin/sync-mxik', {});
+      qc.invalidateQueries({ queryKey: ['admin/sync-mxik'] });
+      toast.info('Загрузка реестра ИКПУ запущена...');
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Ошибка');
+    }
+  }
+
+  const s = syncState.data;
+  const h = health;
+
+  return (
+    <div className="bg-white rounded-lg border p-4 mb-4">
+      <div className="flex items-start justify-between">
+        <div className="flex-1">
+          <div className="text-xs text-gray-500 mb-1">Реестр ИКПУ</div>
+          {h && (
+            <div className="flex flex-wrap gap-4 text-sm mb-2">
+              <div>
+                <span className="text-gray-500">Статус: </span>
+                <span className={h.last_sync_status === 'success' ? 'text-green-600 font-medium' : 'text-red-500 font-medium'}>
+                  {h.last_sync_status ?? '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-500">Активных: </span>
+                <span className="font-medium">{h.active_records.toLocaleString()}</span>
+                <span className="text-gray-400"> / {h.total_records.toLocaleString()}</span>
+              </div>
+              {h.last_sync_at && (
+                <div className="text-gray-400 text-xs">
+                  Обновлён: {new Date(h.last_sync_at).toLocaleString('ru')}
+                </div>
+              )}
+            </div>
+          )}
+          {s?.running && (
+            <div className="text-xs text-blue-600">
+              Загружено: {s.downloaded_mb != null ? `${s.downloaded_mb} МБ` : '...'}
+            </div>
+          )}
+          {s && !s.running && s.error && (
+            <div className="text-xs text-red-500">Ошибка: {s.error}</div>
+          )}
+          {s && !s.running && s.finished_at && s.result === 'ok' && (
+            <div className="text-xs text-gray-400">
+              Последнее обновление: {new Date(s.finished_at).toLocaleString('ru')}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={startSync}
+          disabled={s?.running}
+          className="flex items-center gap-1.5 px-3 py-1.5 border rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed ml-4 flex-shrink-0"
+        >
+          <RefreshCw size={13} className={s?.running ? 'animate-spin' : ''} />
+          {s?.running ? `${s.downloaded_mb ?? 0} МБ...` : 'Обновить реестр'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MxikMapPanel() {
   const qc = useQueryClient();
   const [building, setBuilding] = useState(false);
@@ -403,37 +500,8 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* MXIK health */}
-      {h && (
-        <div className="bg-white rounded-lg border p-4">
-          <div className="text-xs text-gray-500 mb-2">Реестр ИКПУ</div>
-          <div className="flex flex-wrap gap-4 text-sm">
-            <div>
-              <span className="text-gray-500">Статус: </span>
-              <span
-                className={
-                  h.last_sync_status === 'success'
-                    ? 'text-green-600 font-medium'
-                    : 'text-red-500 font-medium'
-                }
-              >
-                {h.last_sync_status ?? '—'}
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-500">Активных записей: </span>
-              <span className="font-medium">{h.active_records.toLocaleString()}</span>
-              <span className="text-gray-400"> / {h.total_records.toLocaleString()}</span>
-            </div>
-            {h.last_sync_at && (
-              <div>
-                <span className="text-gray-500">Последняя синхронизация: </span>
-                <span>{new Date(h.last_sync_at).toLocaleString('ru')}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* MXIK health + sync */}
+      <MxikSyncPanel health={h} onSynced={() => qc.invalidateQueries({ queryKey: ['stats/mxik-health'] })} />
     </div>
   );
 }

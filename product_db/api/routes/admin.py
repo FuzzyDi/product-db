@@ -1,5 +1,7 @@
 """POST /api/v1/admin — административные действия."""
 import asyncio
+import os
+import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime
 
@@ -53,6 +55,70 @@ async def start_reprocess(background_tasks: BackgroundTasks):
 async def reprocess_status():
     """Статус последнего запуска перераспознавания."""
     return ApiResponse(data=dict(_reprocess_state))
+
+
+MXIK_API_URL = "https://tasnif.soliq.uz/api/cl-api/integration-mxik/get/all/history/time-json"
+
+_sync_mxik_state: dict = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "downloaded_mb": None,
+    "result": None,
+    "error": None,
+}
+
+
+async def _run_sync_mxik():
+    import httpx
+    from product_db.scripts.load_mxik_from_file import load as mxik_load
+
+    _sync_mxik_state.update(running=True, started_at=datetime.utcnow().isoformat(),
+                             finished_at=None, downloaded_mb=None, result=None, error=None)
+
+    tmp_path = None
+    try:
+        # Скачиваем JSON в tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        downloaded = 0
+        async with httpx.AsyncClient(timeout=600) as client:
+            async with client.stream("GET", MXIK_API_URL) as response:
+                response.raise_for_status()
+                with open(tmp_path, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        _sync_mxik_state["downloaded_mb"] = round(downloaded / 1_048_576, 1)
+
+        # Загружаем в БД в thread executor (блокирующая операция)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, mxik_load, tmp_path, 500)
+
+        _sync_mxik_state["result"] = "ok"
+    except Exception as e:
+        _sync_mxik_state["error"] = str(e)
+    finally:
+        _sync_mxik_state["running"] = False
+        _sync_mxik_state["finished_at"] = datetime.utcnow().isoformat()
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+@router.post("/sync-mxik", response_model=ApiResponse)
+async def start_sync_mxik(background_tasks: BackgroundTasks):
+    """Запуск синхронизации реестра ИКПУ с tasnif.soliq.uz."""
+    if _sync_mxik_state["running"]:
+        return ApiResponse(success=False, error="Синхронизация уже запущена")
+    background_tasks.add_task(_run_sync_mxik)
+    return ApiResponse(data={"started": True})
+
+
+@router.get("/sync-mxik", response_model=ApiResponse)
+async def sync_mxik_status():
+    """Статус последней синхронизации ИКПУ."""
+    return ApiResponse(data=dict(_sync_mxik_state))
 
 
 @router.post("/build-mxik-map", response_model=ApiResponse)
