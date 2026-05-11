@@ -70,10 +70,12 @@ async def mxik_health(db: AsyncSession = Depends(get_db)):
     log = await db.scalar(
         select(MxikSyncLog).order_by(MxikSyncLog.started_at.desc()).limit(1)
     )
-    total = await db.scalar(select(func.count(MxikCatalog.id))) or 0
-    active = await db.scalar(
-        select(func.count(MxikCatalog.id)).where(MxikCatalog.is_active.is_(True))
+    # Приближённый счётчик из pg_class — мгновенно, не сканирует 429K строк
+    total = await db.scalar(
+        text("SELECT reltuples::bigint FROM pg_class WHERE relname = 'mxik_catalog'")
     ) or 0
+    # Активные берём из последней успешной синхронизации
+    active = (log.records_total or total) if (log and log.status == "success") else total
 
     data = MxikHealthResponse(
         last_sync_status=log.status if log else None,
