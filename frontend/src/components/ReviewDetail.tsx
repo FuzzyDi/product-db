@@ -84,16 +84,16 @@ export default function ReviewDetail() {
 
   useHotkeys(
     {
-      'ctrl+enter': () => confirm(),
+      'ctrl+enter': () => confirmProduct(),
       escape: () => navigate('/review'),
-      a: () => confirm(),
+      a: () => confirmProduct(),
       d: () => dismiss(),
       arrowright: () => goNext(),
     },
     [id, edits, operatorId, queue],
   );
 
-  async function confirm() {
+  async function confirmProduct() {
     if (!id || !operatorId || saving) return;
     setSaving(true);
     try {
@@ -185,7 +185,7 @@ export default function ReviewDetail() {
             <kbd className="ml-1 text-xs opacity-70">D</kbd>
           </button>
           <button
-            onClick={confirm}
+            onClick={confirmProduct}
             disabled={saving || !operatorId}
             className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700 disabled:opacity-50"
           >
@@ -273,7 +273,7 @@ export default function ReviewDetail() {
                     </span>
                     <button
                       onClick={() => {
-                        if (confirm(`Объединить в "${s.name_canonical}"?\nШтрихкоды текущего товара будут перенесены.`)) {
+                        if (window.confirm(`Объединить в "${s.name_canonical}"?\nШтрихкоды текущего товара будут перенесены.`)) {
                           merge(s.product_id);
                         }
                       }}

@@ -9,6 +9,10 @@ interface Category {
   parent_id: number | null;
 }
 
+interface CategoryNode extends Category {
+  children: CategoryNode[];
+}
+
 interface FlatOption {
   id: number;
   label: string;
@@ -16,9 +20,9 @@ interface FlatOption {
 }
 
 function flattenCategories(categories: Category[]): FlatOption[] {
-  const map = new Map<number, Category & { children: Category[] }>();
+  const map = new Map<number, CategoryNode>();
   categories.forEach(c => map.set(c.id, { ...c, children: [] }));
-  const roots: (Category & { children: Category[] })[] = [];
+  const roots: CategoryNode[] = [];
   map.forEach(node => {
     if (node.parent_id == null) roots.push(node);
     else map.get(node.parent_id)?.children.push(node);
@@ -26,7 +30,7 @@ function flattenCategories(categories: Category[]): FlatOption[] {
   roots.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 
   const result: FlatOption[] = [];
-  function walk(nodes: (Category & { children: Category[] })[], depth: number) {
+  function walk(nodes: CategoryNode[], depth: number) {
     nodes.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     for (const node of nodes) {
       result.push({ id: node.id, label: '\u00a0\u00a0'.repeat(depth) + node.name, depth });

@@ -1,4 +1,5 @@
 const BASE = '/api/v1';
+const API_KEY_STORAGE = 'api_key';
 
 interface ApiResponse<T> {
   success: boolean;
@@ -12,8 +13,10 @@ async function request<T>(
   options?: RequestInit & { operatorId?: string },
 ): Promise<T> {
   const { operatorId, ...init } = options ?? {};
+  const apiKey = localStorage.getItem(API_KEY_STORAGE) ?? '';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...(operatorId ? { 'X-Operator-Id': operatorId } : {}),
     ...(init.headers as Record<string, string>),
   };

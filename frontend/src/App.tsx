@@ -3,6 +3,7 @@ import { Toaster } from 'sonner';
 import { useQuery } from '@tanstack/react-query';
 import { LayoutDashboard, ListChecks, Search, Tag, Upload, Layers, GitMerge } from 'lucide-react';
 import { api } from '@/api/client';
+import { useApiKey } from '@/hooks/useApiKey';
 import { useOperatorId } from '@/hooks/useOperatorId';
 import Dashboard from '@/components/Dashboard';
 import ReviewQueue from '@/components/ReviewQueue';
@@ -16,7 +17,9 @@ import { cn } from '@/lib/utils';
 import { useState } from 'react';
 
 function Layout() {
+  const { apiKey, setApiKey } = useApiKey();
   const { operatorId, setOperatorId } = useOperatorId();
+  const [apiKeyDraft, setApiKeyDraft] = useState(apiKey);
   const [idDraft, setIdDraft] = useState(operatorId);
 
   const { data: stats } = useQuery({
@@ -67,8 +70,19 @@ function Layout() {
             </NavLink>
           ))}
         </nav>
-        {/* Operator ID */}
-        <div className="px-3 py-3 border-t border-slate-700">
+        <div className="px-3 py-3 border-t border-slate-700 space-y-3">
+          <div>
+            <div className="text-xs text-gray-400 mb-1">API Key</div>
+            <input
+              value={apiKeyDraft}
+              onChange={e => setApiKeyDraft(e.target.value)}
+              onBlur={() => setApiKey(apiKeyDraft.trim())}
+              placeholder="X-API-Key..."
+              className="w-full bg-slate-700 text-white text-xs px-2 py-1.5 rounded outline-none focus:ring-1 focus:ring-blue-400"
+            />
+          </div>
+
+          {/* Operator ID */}
           <div className="text-xs text-gray-400 mb-1">Оператор</div>
           <input
             value={idDraft}

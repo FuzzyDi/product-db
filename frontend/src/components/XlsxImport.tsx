@@ -32,8 +32,31 @@ interface ParsedRow {
   price_retail?: string;
 }
 
+interface ImportProgress {
+  sent: number;
+  total: number;
+  tasks: number;
+  errors: number;
+  batch: number;
+  totalBatches: number;
+}
+
 function mapHeader(h: string): string {
   return COLUMN_MAP[h.trim().toLowerCase()] ?? h.trim().toLowerCase();
+}
+
+function toParsedRow(row: Record<string, string>): ParsedRow | null {
+  if (!row.name || row.name === 'None') {
+    return null;
+  }
+  return {
+    name: row.name,
+    barcode: row.barcode,
+    internal_code: row.internal_code,
+    uom: row.uom,
+    price_purchase: row.price_purchase,
+    price_retail: row.price_retail,
+  };
 }
 
 function parseSheet(file: File): Promise<ParsedRow[]> {
@@ -52,9 +75,9 @@ function parseSheet(file: File): Promise<ParsedRow[]> {
               const field = mapHeader(k);
               if (v !== '' && v != null) mapped[field] = String(v).trim();
             }
-            return mapped as ParsedRow;
+            return toParsedRow(mapped);
           })
-          .filter((r) => r.name && r.name !== 'None');
+          .filter((row): row is ParsedRow => row !== null);
         resolve(rows);
       } catch (err) {
         reject(err);
@@ -121,7 +144,14 @@ export default function XlsxImport() {
   const [dupsExpanded, setDupsExpanded] = useState(false);
   const [sourceId, setSourceId] = useState('xlsx_import');
   const [status, setStatus] = useState<'idle' | 'parsing' | 'ready' | 'running' | 'done' | 'error'>('idle');
-  const [progress, setProgress] = useState({ sent: 0, total: 0, tasks: 0, errors: 0, batch: 0, totalBatches: 0 });
+  const [progress, setProgress] = useState<ImportProgress>({
+    sent: 0,
+    total: 0,
+    tasks: 0,
+    errors: 0,
+    batch: 0,
+    totalBatches: 0,
+  });
   const [batchErrors, setBatchErrors] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [dragging, setDragging] = useState(false);
@@ -389,7 +419,13 @@ export default function XlsxImport() {
 
           {status === 'done' && (
             <button
-              onClick={() => { setFile(null); setRows([]); setStatus('idle'); setProgress({ sent: 0, total: 0, tasks: 0, errors: 0 }); setBatchErrors([]); }}
+              onClick={() => {
+                setFile(null);
+                setRows([]);
+                setStatus('idle');
+                setProgress({ sent: 0, total: 0, tasks: 0, errors: 0, batch: 0, totalBatches: 0 });
+                setBatchErrors([]);
+              }}
               className="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
             >
               Загрузить ещё файл

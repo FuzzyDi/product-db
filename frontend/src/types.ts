@@ -10,6 +10,7 @@ export interface Product {
   brand_name: string | null;
   brand_id: number | null;
   subbrand: string | null;
+  variant?: string | null;
   product_type_id: number | null;
   category_id: number | null;
   quantity_value: string | null;

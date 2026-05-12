@@ -8,15 +8,16 @@ import { useOperatorId } from '@/hooks/useOperatorId';
 import type { Product, ProductType } from '@/types';
 
 interface Category { id: number; name: string; parent_id: number | null; }
+interface CategoryNode extends Category { children: CategoryNode[]; }
 interface FlatCat { id: number; label: string; }
 
 function flattenCats(cats: Category[]): FlatCat[] {
-  const map = new Map<number, Category & { children: Category[] }>();
+  const map = new Map<number, CategoryNode>();
   cats.forEach(c => map.set(c.id, { ...c, children: [] }));
-  const roots: (Category & { children: Category[] })[] = [];
+  const roots: CategoryNode[] = [];
   map.forEach(n => { if (n.parent_id == null) roots.push(n); else map.get(n.parent_id)?.children.push(n); });
   const result: FlatCat[] = [];
-  function walk(nodes: (Category & { children: Category[] })[], depth: number) {
+  function walk(nodes: CategoryNode[], depth: number) {
     nodes.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     for (const n of nodes) {
       result.push({ id: n.id, label: '\u00a0\u00a0'.repeat(depth) + n.name });
