@@ -49,6 +49,10 @@ function Get-HttpStatusCode {
 }
 
 $results = New-Object System.Collections.Generic.List[object]
+$headers = @{}
+if ($ApiKey) {
+    $headers['X-API-Key'] = $ApiKey
+}
 
 try {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
@@ -68,7 +72,7 @@ foreach ($port in 3002, 8001, 5436, 6382) {
 }
 
 $backendHealth = Get-HttpStatusCode {
-    Invoke-WebRequest -UseBasicParsing -Uri ($BackendUrl.TrimEnd('/') + '/health') -TimeoutSec 10
+    Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri ($BackendUrl.TrimEnd('/') + '/health') -TimeoutSec 10
 }
 
 if ($backendHealth.StatusCode -eq 200) {
@@ -89,11 +93,6 @@ try {
     $results.Add((Write-Check -Name 'FrontendRoot' -Status 'OK' -Details ("HTTP {0}" -f $frontendRoot.StatusCode)))
 } catch {
     $results.Add((Write-Check -Name 'FrontendRoot' -Status 'FAIL' -Details $_.Exception.Message))
-}
-
-$headers = @{}
-if ($ApiKey) {
-    $headers['X-API-Key'] = $ApiKey
 }
 
 $proxyStats = Get-HttpStatusCode {
