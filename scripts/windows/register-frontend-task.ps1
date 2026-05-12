@@ -32,15 +32,15 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1)
-$principal = New-ScheduledTaskPrincipal -UserId $UserName -LogonType Password -RunLevel Highest
 
 Register-ScheduledTask `
     -TaskName $taskName `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
-    -Principal $principal `
+    -User $UserName `
     -Password $Password `
+    -RunLevel Highest `
     -Force | Out-Null
 
 Start-ScheduledTask -TaskName $taskName

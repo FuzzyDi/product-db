@@ -36,8 +36,9 @@ function Get-HttpStatusCode {
         }
     } catch {
         $statusCode = $null
-        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-            $statusCode = [int]$_.Exception.Response.StatusCode
+        $responseProperty = $_.Exception.PSObject.Properties['Response']
+        if ($responseProperty -and $responseProperty.Value -and $responseProperty.Value.StatusCode) {
+            $statusCode = [int]$responseProperty.Value.StatusCode
         }
 
         return [pscustomobject]@{
