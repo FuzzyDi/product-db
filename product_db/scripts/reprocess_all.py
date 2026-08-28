@@ -9,17 +9,25 @@
 import asyncio
 import re
 from decimal import Decimal
+from types import SimpleNamespace
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from product_db.config import settings
-from product_db.models.db import Brand, BrandAlias, Category, Product, ProductType
+from product_db.models.db import Brand, BrandAlias, Category, OperatorDecision, Product, ProductType
 from product_db.nlp.fuzzy import find_best_brand
 from product_db.nlp.lemmatize import lemmatize_ru
 from product_db.pipeline.generate import build_canonical
-from product_db.pipeline.extract import _QTY_RE, _UNIT_MAP, _PKG_RE, _PKG_MAP
-from product_db.pipeline.quality import _CONFIDENCE_PENALTIES, _COMPLETENESS_PENALTIES
+from product_db.pipeline.extract import _QTY_RE, _UNIT_MAP, _PKG_RE, _PKG_MAP, _apply_product_type_overrides
+from product_db.pipeline.mxik_step import _find_group_by_text, _find_group_code
+from product_db.pipeline.quality import CRITICAL_ISSUES, _CONFIDENCE_PENALTIES, _COMPLETENESS_PENALTIES
+from product_db.pipeline.route import (
+    AUTO_CONFIRM_THRESHOLD,
+    _PRODUCT_TYPE_TO_CATEGORY,
+    _build_review_reasons,
+    _is_structurally_complete_for_auto_verify,
+)
 
 # Issues которые пайплайн ставит при отсутствии данных
 _ISSUE_MISSING_BRAND        = "MISSING_BRAND"
@@ -58,11 +66,12 @@ def _find_product_type(tokens: list[str], types: list[tuple[int, str, list[str]]
     return best_id, best_name
 
 
-def _recalc_issues(issues: list[str], brand_id, product_type_id, mxik_code) -> list[str]:
+def _recalc_issues(issues: list[str], brand_id, product_type_id, mxik_code, mxik_is_group_code) -> list[str]:
     result = list(issues or [])
     if brand_id or True:  # пересчитываем с нуля
         result = [i for i in result if i != _ISSUE_MISSING_BRAND]
         result = [i for i in result if i != _ISSUE_MISSING_TYPE]
+    result = [i for i in result if i not in (_ISSUE_MISSING_MXIK, "MXIK_GROUP_CODE")]
     if not brand_id:
         if _ISSUE_MISSING_BRAND not in result:
             result.append(_ISSUE_MISSING_BRAND)
@@ -72,8 +81,8 @@ def _recalc_issues(issues: list[str], brand_id, product_type_id, mxik_code) -> l
     if not mxik_code:
         if _ISSUE_MISSING_MXIK not in result:
             result.append(_ISSUE_MISSING_MXIK)
-    else:
-        result = [i for i in result if i != _ISSUE_MISSING_MXIK]
+    elif mxik_is_group_code and "MXIK_GROUP_CODE" not in result:
+        result.append("MXIK_GROUP_CODE")
     return result
 
 
@@ -104,10 +113,29 @@ async def main() -> None:
         type_uz_map = {row.id: row.name_uz_latn for row in pt_rows}
         print(f"Типов товаров: {len(types)}")
 
-        # Загружаем категории — строим маппинг name.lower() → id
+        # Загружаем категории — строим маппинг name → id
         cat_result = await session.execute(select(Category.id, Category.name))
-        cat_by_name = {row.name.lower(): row.id for row in cat_result.all()}
+        cat_by_name = {row.name: row.id for row in cat_result.all()}
         print(f"Категорий: {len(cat_by_name)}")
+
+        # Поля, которые оператор исправлял вручную, не трогаем
+        decision_rows = await session.execute(
+            select(
+                OperatorDecision.product_id,
+                OperatorDecision.field_name,
+            ).where(
+                OperatorDecision.decision_type == "correct_field",
+                OperatorDecision.field_name.is_not(None),
+            )
+        )
+        protected_by_product: dict = {}
+        for product_id, field_name in decision_rows.all():
+            if not field_name:
+                continue
+            fields = protected_by_product.setdefault(product_id, set())
+            fields.add(field_name)
+            if field_name in {"brand_id", "brand_name"}:
+                fields.update({"brand_id", "brand_name"})
 
         # Загружаем все продукты
         products_result = await session.execute(select(Product))
@@ -122,27 +150,44 @@ async def main() -> None:
             name_raw = p.name_raw.strip()
             tokens = _tokenize(name_raw)
 
-            # Бренд — не трогаем если уже установлен оператором
-            if p.brand_id:
+            protected_fields = protected_by_product.get(p.product_id, set())
+
+            # Бренд — пересчитываем всегда, кроме реально поправленных оператором
+            if {"brand_id", "brand_name"} & protected_fields:
                 brand_id, brand_name = p.brand_id, p.brand_name
             else:
                 brand_id, brand_name, _ = find_best_brand(name_raw, aliases)
 
-            # Тип товара — не трогаем если уже установлен оператором
-            if p.product_type_id:
+            # Тип товара — пересчитываем всегда, кроме реально поправленных оператором
+            if "product_type_id" in protected_fields:
                 product_type_id = p.product_type_id
                 product_type_name = type_map.get(p.product_type_id)
             else:
                 product_type_id, product_type_name = _find_product_type(tokens, types)
 
-            product_type_uz = type_uz_map.get(product_type_id) if product_type_id else None
+            package_code = _extract_package(name_raw) or p.package_code
 
             # Количество и упаковка
             qty_value, qty_unit = _extract_quantity(name_raw)
-            package_code = _extract_package(name_raw)
             eff_qty_value = qty_value or p.quantity_value
             eff_qty_unit = qty_unit or p.quantity_unit
             eff_package = package_code or p.package_code
+
+            override_type_id, override_type_name = await _apply_product_type_overrides(
+                SimpleNamespace(
+                    brand_name=brand_name,
+                    package_code=package_code,
+                    tokens=tokens,
+                    quantity_value=eff_qty_value,
+                    quantity_unit=eff_qty_unit,
+                ),
+                session,
+            )
+            if override_type_id and "product_type_id" not in protected_fields:
+                product_type_id = override_type_id
+                product_type_name = override_type_name
+
+            product_type_uz = type_uz_map.get(product_type_id) if product_type_id else None
 
             # Canonical name (рус.)
             new_canonical = build_canonical(
@@ -170,25 +215,51 @@ async def main() -> None:
                 lang="uz",
             ) if (brand_name or product_type_uz or product_type_name) else None
 
-            # Категория — по имени типа товара, не трогаем если уже установлена оператором
-            new_category_id = p.category_id
-            if not p.category_id and product_type_name:
-                new_category_id = cat_by_name.get(product_type_name.lower())
+            # Категория — пересчитываем по актуальному маппингу, кроме реально поправленных оператором
+            if "category_id" in protected_fields:
+                new_category_id = p.category_id
+            else:
+                new_category_id = None
+                if product_type_name:
+                    category_name = _PRODUCT_TYPE_TO_CATEGORY.get(product_type_name)
+                    if category_name:
+                        new_category_id = cat_by_name.get(category_name)
+
+            # ИКПУ — если раньше не был найден, пробуем переиспользовать live-логику:
+            # 1) групповой поиск по тексту; 2) маппинг product_type -> group MXIK.
+            mxik_code = p.mxik_code
+            mxik_is_group_code = bool(p.mxik_is_group_code)
+            mxik_confidence = p.mxik_confidence
+            if not mxik_code:
+                group_mxik = None
+                if p.name_normalized:
+                    group_mxik = await _find_group_by_text(session, p.name_normalized)
+                if group_mxik:
+                    mxik_code = group_mxik.mxik
+                    mxik_is_group_code = bool(group_mxik.is_group_code)
+                    mxik_confidence = Decimal("0.50")
+                elif product_type_id:
+                    group_code, group_conf = await _find_group_code(session, product_type_id)
+                    if group_code:
+                        mxik_code = group_code
+                        mxik_is_group_code = True
+                        mxik_confidence = group_conf
 
             # Issues — сохраняем MXIK-related, пересчитываем brand/type
             new_issues = _recalc_issues(
                 p.issues,
                 brand_id,
                 product_type_id,
-                p.mxik_code,
+                mxik_code,
+                mxik_is_group_code,
             )
 
             # Обновляем только если что-то изменилось
             changes = {}
-            if brand_id and brand_id != p.brand_id:
+            if brand_id != p.brand_id or brand_name != p.brand_name:
                 changes["brand_id"] = brand_id
                 changes["brand_name"] = brand_name
-            if product_type_id and product_type_id != p.product_type_id:
+            if product_type_id != p.product_type_id:
                 changes["product_type_id"] = product_type_id
             if qty_value and qty_value != p.quantity_value:
                 changes["quantity_value"] = qty_value
@@ -200,8 +271,14 @@ async def main() -> None:
                 changes["name_receipt"] = new_canonical[:40]
             if new_uz_latn and new_uz_latn != p.name_uz_latn:
                 changes["name_uz_latn"] = new_uz_latn
-            if new_category_id and new_category_id != p.category_id:
+            if new_category_id != p.category_id:
                 changes["category_id"] = new_category_id
+            if mxik_code != p.mxik_code:
+                changes["mxik_code"] = mxik_code
+            if mxik_is_group_code != bool(p.mxik_is_group_code):
+                changes["mxik_is_group_code"] = mxik_is_group_code
+            if mxik_confidence != p.mxik_confidence:
+                changes["mxik_confidence"] = mxik_confidence
             if new_issues != (p.issues or []):
                 changes["issues"] = new_issues
 
@@ -216,6 +293,41 @@ async def main() -> None:
             if new_confidence != float(p.confidence_score or 0):
                 changes["confidence_score"] = new_confidence
                 changes["completeness_score"] = new_completeness
+
+            has_critical = any(issue in CRITICAL_ISSUES for issue in new_issues)
+            auto = (
+                (
+                    new_confidence >= AUTO_CONFIRM_THRESHOLD
+                    or _is_structurally_complete_for_auto_verify(
+                        brand_id=brand_id,
+                        product_type_id=product_type_id,
+                        category_id=new_category_id,
+                        mxik_code=mxik_code,
+                        mxik_is_group_code=mxik_is_group_code,
+                        issues=new_issues,
+                    )
+                )
+                and not has_critical
+                and not mxik_is_group_code
+            )
+            new_review_required = not auto
+            if p.status == "certified":
+                new_status = p.status
+                new_review_required = False
+            else:
+                new_status = "verified" if auto else "draft"
+            new_review_reasons = _build_review_reasons(
+                review_required=new_review_required,
+                issues=new_issues,
+                mxik_is_group_code=mxik_is_group_code,
+            )
+
+            if new_review_required != p.review_required:
+                changes["review_required"] = new_review_required
+            if new_status != p.status:
+                changes["status"] = new_status
+            if new_review_reasons != (p.review_reasons or []):
+                changes["review_reasons"] = new_review_reasons
 
             if changes:
                 await session.execute(
