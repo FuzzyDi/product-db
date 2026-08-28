@@ -1,4 +1,6 @@
 """Нечёткий поиск через rapidfuzz."""
+import re
+
 from rapidfuzz import fuzz, process
 
 BRAND_THRESHOLD = 82     # минимальный score для бренда
@@ -12,6 +14,22 @@ def find_best_brand(
     """Возвращает (brand_id, canonical_name, score) или (None, None, 0)."""
     if not aliases:
         return None, None, 0.0
+
+    text_norm = re.sub(r"[^0-9A-Za-zА-Яа-яЁё]+", " ", text).strip().lower()
+    best_substring: tuple[int, str] | None = None
+    best_len = 0
+    for alias, brand_id, canonical in aliases:
+        alias_norm = re.sub(r"[^0-9A-Za-zА-Яа-яЁё]+", " ", alias).strip().lower()
+        if len(alias_norm.replace(" ", "")) < 3:
+            continue
+        if f" {alias_norm} " in f" {text_norm} ":
+            if len(alias_norm) > best_len:
+                best_substring = (brand_id, canonical)
+                best_len = len(alias_norm)
+
+    if best_substring:
+        brand_id, canonical = best_substring
+        return brand_id, canonical, 100.0
 
     alias_texts = [a[0] for a in aliases]
     result = process.extractOne(

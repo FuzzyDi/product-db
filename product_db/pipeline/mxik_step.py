@@ -1,4 +1,5 @@
 """Step 6: поиск ИКПУ (MXIK)."""
+import re
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -7,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from product_db.models.db import MxikCatalog, ProductTypeMxikMap
 from .context import PipelineContext
 from .barcode import GLOBAL_TYPES
+
+_TSQUERY_WORD_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё]+")
 
 
 async def _find_by_barcode(session: AsyncSession, barcode: str) -> MxikCatalog | None:
@@ -20,7 +23,7 @@ async def _find_by_barcode(session: AsyncSession, barcode: str) -> MxikCatalog |
 
 async def _find_group_by_text(session: AsyncSession, name: str) -> MxikCatalog | None:
     """Поиск группового ИКПУ через full-text search. Только is_group_code=true."""
-    words = [w for w in name.split() if len(w) > 2]
+    words = [w.lower() for w in _TSQUERY_WORD_RE.findall(name) if len(w) > 2]
     if not words:
         return None
     query_str = " | ".join(words[:5])
