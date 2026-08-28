@@ -15,6 +15,30 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 GLOBAL_TYPES = {"ean13", "ean8", "upc_a", "gs1_128"}
+INTERNAL_BARCODE_PREFIXES = tuple(f"2{i}" for i in range(10))
+
+
+def normalize_barcode(value: str | None) -> str | None:
+    if value is None:
+        return None
+    barcode = str(value).strip()
+    if not barcode or barcode.lower() in ("none", "nan", "0"):
+        return None
+    if re.fullmatch(r"[\d.]+", barcode):
+        try:
+            barcode = str(int(round(float(barcode))))
+        except ValueError:
+            return barcode
+    return barcode
+
+
+def should_skip_import_barcode(barcode: str | None) -> tuple[bool, str | None]:
+    normalized = normalize_barcode(barcode)
+    if not normalized:
+        return True, "MISSING_BARCODE"
+    if normalized.isdigit() and len(normalized) >= 2 and normalized[:2] in INTERNAL_BARCODE_PREFIXES:
+        return True, "INTERNAL_BARCODE_PREFIX"
+    return False, None
 
 
 def detect_barcode_type(barcode: str) -> str | None:
@@ -27,7 +51,8 @@ def detect_barcode_type(barcode: str) -> str | None:
 def run(ctx: PipelineContext) -> PipelineContext:
     if not ctx.barcode:
         return ctx
-    bc = ctx.barcode.strip()
+    bc = normalize_barcode(ctx.barcode) or ctx.barcode.strip()
+    ctx.barcode = bc
     ctx.barcode_type = detect_barcode_type(bc)
     if ctx.barcode_type and ctx.barcode_type not in GLOBAL_TYPES:
         ctx.issues.append("INTERNAL_BC_AS_GLOBAL")

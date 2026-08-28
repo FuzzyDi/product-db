@@ -23,6 +23,8 @@ except ImportError:
     print("Установите: pip install openpyxl requests")
     sys.exit(1)
 
+from product_db.pipeline.barcode import normalize_barcode, should_skip_import_barcode
+
 # Маппинг колонок XLSX → поля API
 COLUMN_MAP = {
     "наименование": "name",
@@ -62,16 +64,15 @@ def read_xlsx(path: str) -> list[dict]:
     return records
 
 
-def build_item(record: dict, source_id: str) -> dict | None:
+def build_item(record: dict, source_id: str) -> tuple[dict | None, str | None]:
     name = str(record.get("name") or "").strip()
     if not name or name.lower() == "none":
-        return None
+        return None, "EMPTY_NAME"
 
-    barcode = record.get("barcode")
-    if barcode is not None:
-        barcode = str(int(barcode)) if isinstance(barcode, float) else str(barcode).strip()
-        if not barcode or barcode.lower() in ("none", "nan", "0"):
-            barcode = None
+    barcode = normalize_barcode(record.get("barcode"))
+    skip, reason = should_skip_import_barcode(barcode)
+    if skip:
+        return None, reason
 
     extra = {}
     for key in ("internal_code", "uom", "price_purchase", "price_retail"):
@@ -79,7 +80,7 @@ def build_item(record: dict, source_id: str) -> dict | None:
         if val is not None and str(val).strip() not in ("", "None", "nan"):
             extra[key] = str(val).strip()
 
-    return {"name": name, "barcode": barcode, "source_id": source_id, "extra": extra}
+    return {"name": name, "barcode": barcode, "source_id": source_id, "extra": extra}, None
 
 
 def send_batch(url: str, items: list[dict], api_key: str | None) -> dict:
@@ -110,15 +111,27 @@ def main():
     print(f"Строк в файле: {len(records)}")
 
     items = []
-    skipped = 0
+    skipped_empty = 0
+    skipped_missing_barcode = 0
+    skipped_internal_prefix = 0
     for rec in records:
-        item = build_item(rec, args.source_id)
+        item, reason = build_item(rec, args.source_id)
         if item:
             items.append(item)
         else:
-            skipped += 1
+            if reason == "EMPTY_NAME":
+                skipped_empty += 1
+            elif reason == "MISSING_BARCODE":
+                skipped_missing_barcode += 1
+            elif reason == "INTERNAL_BARCODE_PREFIX":
+                skipped_internal_prefix += 1
 
-    print(f"Товаров к загрузке: {len(items)} | пропущено (пустые): {skipped}")
+    total_skipped = skipped_empty + skipped_missing_barcode + skipped_internal_prefix
+    print(
+        f"Товаров к загрузке: {len(items)} | "
+        f"пропущено: {total_skipped} "
+        f"(пустые: {skipped_empty}, без ШК: {skipped_missing_barcode}, ШК 20-29: {skipped_internal_prefix})"
+    )
     if not items:
         print("Нечего загружать.")
         return
@@ -131,8 +144,9 @@ def main():
         try:
             result = send_batch(args.url, batch, args.api_key)
             task_ids = result.get("data", {}).get("task_ids", [])
+            skipped_count = result.get("data", {}).get("skipped_count", 0)
             total += len(batch)
-            print(f"Пакет {batch_num}: отправлено {len(batch)} | задач Celery: {len(task_ids)}")
+            print(f"Пакет {batch_num}: отправлено {len(batch)} | задач Celery: {len(task_ids)} | пропущено API: {skipped_count}")
         except requests.HTTPError as e:
             print(f"Пакет {batch_num}: ошибка HTTP {e.response.status_code} — {e.response.text[:200]}")
         except Exception as e:

@@ -18,16 +18,31 @@ from product_db.models.schemas import (
     IntakeStatusResponse,
     ProductIntakeRequest,
 )
+from product_db.pipeline.barcode import normalize_barcode, should_skip_import_barcode
 from product_db.pipeline.processor import process
 from product_db.tasks.process_input import process_input
 
 router = APIRouter(prefix="/intake", tags=["intake"])
 
 
+def _skip_payload_reason(barcode: str | None) -> tuple[bool, str | None, str | None]:
+    normalized = normalize_barcode(barcode)
+    skip, reason = should_skip_import_barcode(normalized)
+    return skip, reason, normalized
+
+
 @router.post("/single", response_model=ApiResponse)
 @limiter.limit("120/minute")
 async def intake_single(request: Request, req: ProductIntakeRequest, db: AsyncSession = Depends(get_db)):
-    payload = {"name": req.name, "barcode": req.barcode, **req.extra}
+    skip, reason, normalized_barcode = _skip_payload_reason(req.barcode)
+    if skip:
+        return ApiResponse(data={
+            "skipped": True,
+            "reason": reason,
+            "name": req.name,
+            "barcode": normalized_barcode,
+        })
+    payload = {"name": req.name, "barcode": normalized_barcode, **req.extra}
     ctx = await process(db, source_id=req.source_id, source_type="api", payload=payload)
     data = IntakeResponse(
         raw_input_id=ctx.raw_input_id,
@@ -46,15 +61,31 @@ async def intake_single(request: Request, req: ProductIntakeRequest, db: AsyncSe
 async def intake_batch(request: Request, req: BatchIntakeRequest):
     """Ставит товары в очередь Celery (асинхронно)."""
     task_ids = []
+    skipped = []
     for item in req.items:
-        payload = {"name": item.name, "barcode": item.barcode, **item.extra}
+        skip, reason, normalized_barcode = _skip_payload_reason(item.barcode)
+        if skip:
+            skipped.append({
+                "source_id": item.source_id,
+                "name": item.name,
+                "barcode": normalized_barcode,
+                "reason": reason,
+            })
+            continue
+        payload = {"name": item.name, "barcode": normalized_barcode, **item.extra}
         task = process_input.delay(
             source_id=item.source_id,
             source_type=req.source_type,
             payload=payload,
         )
         task_ids.append(task.id)
-    return ApiResponse(data={"task_ids": task_ids, "count": len(task_ids)})
+    return ApiResponse(data={
+        "task_ids": task_ids,
+        "count": len(task_ids),
+        "accepted_count": len(task_ids),
+        "skipped_count": len(skipped),
+        "skipped_examples": skipped[:20],
+    })
 
 
 @router.get("/{raw_input_id}/status", response_model=ApiResponse)

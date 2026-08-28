@@ -4,6 +4,7 @@ import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from product_db.config import settings
+from product_db.pipeline.barcode import normalize_barcode, should_skip_import_barcode
 from product_db.pipeline.processor import process
 from .celery_app import app
 
@@ -11,6 +12,16 @@ from .celery_app import app
 @app.task(bind=True, max_retries=3, default_retry_delay=30)
 def process_input(self, *, source_id: str, source_type: str, payload: dict) -> dict:
     try:
+        barcode = normalize_barcode(payload.get("barcode"))
+        skip, reason = should_skip_import_barcode(barcode)
+        if skip:
+            return {
+                "skipped": True,
+                "reason": reason,
+                "source_id": source_id,
+                "name": payload.get("name"),
+                "barcode": barcode,
+            }
         ctx = asyncio.run(_run(source_id=source_id, source_type=source_type, payload=payload))
         return {
             "product_id": str(ctx.product_id),

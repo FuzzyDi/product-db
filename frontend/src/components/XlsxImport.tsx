@@ -32,6 +32,13 @@ interface ParsedRow {
   price_retail?: string;
 }
 
+interface SkippedImportRow {
+  row: number;
+  name: string;
+  barcode: string | null;
+  reason: 'missing_barcode' | 'internal_barcode_prefix';
+}
+
 interface ImportProgress {
   sent: number;
   total: number;
@@ -95,12 +102,25 @@ function buildItem(row: ParsedRow, sourceId: string) {
   if (row.price_purchase) extra.price_purchase = row.price_purchase;
   if (row.price_retail) extra.price_retail = row.price_retail;
 
-  let barcode = row.barcode;
-  if (barcode && /^[\d.]+$/.test(barcode)) {
-    barcode = String(Math.round(Number(barcode)));
-  }
-
+  const barcode = normalizeBarcode(row.barcode);
   return { name: row.name, barcode: barcode || null, source_id: sourceId, extra };
+}
+
+function normalizeBarcode(barcode?: string) {
+  if (!barcode) return null;
+  let normalized = barcode.trim();
+  if (!normalized || ['none', 'nan', '0'].includes(normalized.toLowerCase())) return null;
+  if (/^[\d.]+$/.test(normalized)) {
+    normalized = String(Math.round(Number(normalized)));
+  }
+  return normalized;
+}
+
+function getImportSkipReason(barcode?: string): SkippedImportRow['reason'] | null {
+  const normalized = normalizeBarcode(barcode);
+  if (!normalized) return 'missing_barcode';
+  if (/^\d{2,}$/.test(normalized) && /^2\d/.test(normalized)) return 'internal_barcode_prefix';
+  return null;
 }
 
 const BATCH_SIZE = 100;
@@ -141,6 +161,7 @@ export default function XlsxImport() {
   const [file, setFile] = useState<File | null>(null);
   const [rows, setRows] = useState<ParsedRow[]>([]);
   const [duplicates, setDuplicates] = useState<DuplicateWarning[]>([]);
+  const [skippedRows, setSkippedRows] = useState<SkippedImportRow[]>([]);
   const [dupsExpanded, setDupsExpanded] = useState(false);
   const [sourceId, setSourceId] = useState('xlsx_import');
   const [status, setStatus] = useState<'idle' | 'parsing' | 'ready' | 'running' | 'done' | 'error'>('idle');
@@ -161,8 +182,25 @@ export default function XlsxImport() {
     setStatus('parsing');
     try {
       const parsed = await parseSheet(f);
-      setRows(parsed);
-      setDuplicates(findDuplicates(parsed));
+      const accepted: ParsedRow[] = [];
+      const skipped: SkippedImportRow[] = [];
+      parsed.forEach((row, i) => {
+        const barcode = normalizeBarcode(row.barcode);
+        const reason = getImportSkipReason(barcode ?? undefined);
+        if (reason) {
+          skipped.push({
+            row: i + 2,
+            name: row.name,
+            barcode,
+            reason,
+          });
+          return;
+        }
+        accepted.push({ ...row, barcode: barcode ?? undefined });
+      });
+      setRows(accepted);
+      setSkippedRows(skipped);
+      setDuplicates(findDuplicates(accepted));
       setDupsExpanded(false);
       setStatus('ready');
     } catch (e) {
@@ -271,12 +309,15 @@ export default function XlsxImport() {
             <FileSpreadsheet size={20} className="text-green-600" />
             <div className="flex-1">
               <p className="text-sm font-medium">{file?.name}</p>
-              <p className="text-xs text-gray-500">{rows.length} товаров</p>
+              <p className="text-xs text-gray-500">
+                К импорту: {rows.length}
+                {skippedRows.length > 0 ? ` · пропущено: ${skippedRows.length}` : ''}
+              </p>
             </div>
             {status === 'ready' && (
               <button
                 className="text-xs text-gray-400 hover:text-gray-600"
-                onClick={() => { setFile(null); setRows([]); setStatus('idle'); }}
+                onClick={() => { setFile(null); setRows([]); setSkippedRows([]); setStatus('idle'); }}
               >
                 Другой файл
               </button>
@@ -292,6 +333,30 @@ export default function XlsxImport() {
                 onChange={(e) => setSourceId(e.target.value)}
                 className="border rounded px-3 py-1.5 text-sm flex-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
+            </div>
+          )}
+
+          {status === 'ready' && skippedRows.length > 0 && (
+            <div className="border border-orange-300 bg-orange-50 rounded-lg overflow-hidden">
+              <div className="px-4 py-2.5 text-sm text-orange-900 font-medium">
+                Пропущено {skippedRows.length} строк: без штрихкода или со штрихкодом 20–29
+              </div>
+              <div className="border-t border-orange-200 divide-y divide-orange-100 max-h-48 overflow-y-auto">
+                {skippedRows.slice(0, 20).map((r, i) => (
+                  <div key={`${r.row}-${i}`} className="px-4 py-2 text-xs text-orange-900 flex gap-3">
+                    <span className="flex-shrink-0 font-medium">строка {r.row}</span>
+                    <span className="truncate flex-1">{r.name}</span>
+                    <span className="flex-shrink-0 text-orange-700">
+                      {r.reason === 'missing_barcode' ? 'без ШК' : 'ШК 20–29'}
+                    </span>
+                  </div>
+                ))}
+                {skippedRows.length > 20 && (
+                  <div className="px-4 py-2 text-xs text-orange-700">
+                    И ещё {skippedRows.length - 20} строк
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -422,6 +487,7 @@ export default function XlsxImport() {
               onClick={() => {
                 setFile(null);
                 setRows([]);
+                setSkippedRows([]);
                 setStatus('idle');
                 setProgress({ sent: 0, total: 0, tasks: 0, errors: 0, batch: 0, totalBatches: 0 });
                 setBatchErrors([]);
