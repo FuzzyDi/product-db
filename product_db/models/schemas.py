@@ -106,6 +106,9 @@ class PipelineStatsResponse(BaseModel):
     total_products: int
     by_status: dict[str, int]
     review_queue_size: int
+    review_group_mxik_size: int = 0
+    review_non_group_size: int = 0
+    review_breakdown: dict[str, int] = {}
     with_brand: int
     with_mxik: int
     with_barcode: int

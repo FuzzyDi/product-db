@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { CheckCheck, ChevronUp, ChevronDown, X } from 'lucide-react';
 import { api } from '@/api/client';
 import { useOperatorId } from '@/hooks/useOperatorId';
-import type { Product, ProductType } from '@/types';
+import type { GroupMxikBucket, PipelineStats, Product, ProductType } from '@/types';
 
 interface Category { id: number; name: string; parent_id: number | null; }
 interface CategoryNode extends Category { children: CategoryNode[]; }
@@ -39,6 +39,9 @@ interface QueueData {
 
 const ISSUE_FILTERS = [
   { label: 'Все', value: '' },
+  { label: 'Негрупповые', value: '__NON_GROUP__' },
+  { label: 'Workflow GROUP_MXIK', value: '__GROUP_MXIK__' },
+  { label: 'Внутр. ШК', value: 'INTERNAL_BC_AS_GLOBAL' },
   { label: 'Нет бренда', value: 'MISSING_BRAND' },
   { label: 'Нет типа', value: 'MISSING_PRODUCT_TYPE' },
   { label: 'Нет ИКПУ', value: 'MISSING_MXIK' },
@@ -46,9 +49,18 @@ const ISSUE_FILTERS = [
 
 export default function ReviewQueue() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
   const { operatorId } = useOperatorId();
-  const [issueFilter, setIssueFilter] = useState('');
+  const scope = searchParams.get('scope');
+  const initialGroupCodeFilter = searchParams.get('group_code') ?? '';
+  const initialIssueFilter = scope === 'non_group'
+    ? '__NON_GROUP__'
+    : scope === 'group_mxik'
+      ? '__GROUP_MXIK__'
+      : (searchParams.get('reason') ?? '');
+  const [issueFilter, setIssueFilter] = useState(initialIssueFilter);
+  const [groupCodeFilter, setGroupCodeFilter] = useState(initialGroupCodeFilter);
   const [search, setSearch] = useState('');
   const [brandFilter, setBrandFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState<number | ''>('');
@@ -88,21 +100,41 @@ export default function ReviewQueue() {
     queryFn: () => api.get<Category[]>('/refs/categories'),
     staleTime: 60_000,
   });
+  const { data: stats } = useQuery({
+    queryKey: ['stats/pipeline'],
+    queryFn: () => api.get<PipelineStats>('/stats/pipeline'),
+    staleTime: 15_000,
+  });
+  const { data: groupMxikBuckets } = useQuery({
+    queryKey: ['review/group-mxik-buckets'],
+    queryFn: () => api.get<GroupMxikBucket[]>('/review/group-mxik-buckets?limit=200'),
+    enabled: issueFilter === '__GROUP_MXIK__',
+    staleTime: 30_000,
+  });
   const categoryOptions = flattenCats(Array.isArray(categoriesRaw) ? categoriesRaw : []);
 
+  const groupOnlyParam = issueFilter === '__GROUP_MXIK__' ? '&group_mxik_only=true' : '';
+  const nonGroupOnlyParam = issueFilter === '__NON_GROUP__' ? '&non_group_only=true' : '';
+  const groupCodeParam = issueFilter === '__GROUP_MXIK__' && groupCodeFilter
+    ? `&mxik_code=${encodeURIComponent(groupCodeFilter)}`
+    : '';
+  const reviewReasonValue =
+    issueFilter && issueFilter !== '__NON_GROUP__' && issueFilter !== '__GROUP_MXIK__'
+      ? issueFilter
+      : '';
   const typeParam = typeFilter ? `&product_type_id=${typeFilter}` : '';
   const catParam = categoryFilter ? `&category_id=${categoryFilter}` : '';
   const noTypeParam = noType ? '&no_type=true' : '';
   const noCatParam = noCategory ? '&no_category=true' : '';
+  const reasonParam = reviewReasonValue ? `&review_reason=${encodeURIComponent(reviewReasonValue)}` : '';
   const { data, isLoading } = useQuery({
-    queryKey: ['review/queue', page, sortBy, sortDir, typeFilter, categoryFilter, noType, noCategory],
-    queryFn: () => api.get<QueueData>(`/review/queue?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&sort_by=${sortBy}&sort_dir=${sortDir}${typeParam}${catParam}${noTypeParam}${noCatParam}`),
+    queryKey: ['review/queue', page, sortBy, sortDir, issueFilter, groupCodeFilter, typeFilter, categoryFilter, noType, noCategory],
+    queryFn: () => api.get<QueueData>(`/review/queue?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&sort_by=${sortBy}&sort_dir=${sortDir}${reasonParam}${groupOnlyParam}${nonGroupOnlyParam}${groupCodeParam}${typeParam}${catParam}${noTypeParam}${noCatParam}`),
     refetchInterval: 15_000,
   });
 
   const allItems = data?.items ?? [];
   const items = allItems.filter(p => {
-    if (issueFilter && !p.issues?.includes(issueFilter)) return false;
     if (brandFilter && p.brand_name !== brandFilter) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -117,6 +149,69 @@ export default function ReviewQueue() {
   });
 
   const brandOptions = [...new Set(allItems.map(p => p.brand_name).filter(Boolean) as string[])].sort();
+  const reviewBreakdown = stats?.review_breakdown ?? {};
+  const issueCounts: Record<string, number> = {
+    '': stats?.review_queue_size ?? 0,
+    '__NON_GROUP__': stats?.review_non_group_size ?? 0,
+    '__GROUP_MXIK__': stats?.review_group_mxik_size ?? 0,
+    INTERNAL_BC_AS_GLOBAL: reviewBreakdown.INTERNAL_BC_AS_GLOBAL ?? 0,
+    MISSING_BRAND: reviewBreakdown.MISSING_BRAND ?? 0,
+    MISSING_PRODUCT_TYPE: reviewBreakdown.MISSING_PRODUCT_TYPE ?? 0,
+    MISSING_MXIK: reviewBreakdown.MISSING_MXIK ?? 0,
+  };
+
+  useEffect(() => {
+    const nextScope = searchParams.get('scope');
+    const next = nextScope === 'non_group'
+      ? '__NON_GROUP__'
+      : nextScope === 'group_mxik'
+        ? '__GROUP_MXIK__'
+        : (searchParams.get('reason') ?? '');
+    setIssueFilter(prev => (prev === next ? prev : next));
+    const nextGroupCode = searchParams.get('group_code') ?? '';
+    setGroupCodeFilter(prev => (prev === nextGroupCode ? prev : nextGroupCode));
+  }, [searchParams]);
+
+  function applyIssueFilter(value: string) {
+    const next = new URLSearchParams(searchParams);
+    next.delete('reason');
+    next.delete('scope');
+    next.delete('group_code');
+    if (value === '__NON_GROUP__') {
+      next.set('scope', 'non_group');
+    } else if (value === '__GROUP_MXIK__') {
+      next.set('scope', 'group_mxik');
+    } else if (value) {
+      next.set('reason', value);
+    }
+    setSearchParams(next, { replace: true });
+    setIssueFilter(value);
+    setGroupCodeFilter('');
+    setPage(0);
+    setFocusedIdx(0);
+  }
+
+  function applyGroupCodeFilter(value: string) {
+    const next = new URLSearchParams(searchParams);
+    if (issueFilter === '__GROUP_MXIK__') {
+      next.set('scope', 'group_mxik');
+      if (value) next.set('group_code', value);
+      else next.delete('group_code');
+    }
+    setSearchParams(next, { replace: true });
+    setGroupCodeFilter(value);
+    setPage(0);
+    setFocusedIdx(0);
+    setSelected(new Set());
+  }
+
+  function openReview(productId: string) {
+    const query = searchParams.toString();
+    navigate({
+      pathname: `/review/${productId}`,
+      search: query ? `?${query}` : '',
+    });
+  }
 
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -215,7 +310,7 @@ export default function ReviewQueue() {
           {ISSUE_FILTERS.map(f => (
             <button
               key={f.value}
-              onClick={() => { setIssueFilter(f.value); setPage(0); setFocusedIdx(0); }}
+              onClick={() => applyIssueFilter(f.value)}
               className={`text-xs px-2 py-1 rounded border transition-colors ${
                 issueFilter === f.value
                   ? 'bg-blue-600 text-white border-blue-600'
@@ -223,6 +318,7 @@ export default function ReviewQueue() {
               }`}
             >
               {f.label}
+              <span className="ml-1 opacity-70">{issueCounts[f.value] ?? 0}</span>
             </button>
           ))}
         </div>
@@ -288,6 +384,53 @@ export default function ReviewQueue() {
         </label>
       </div>
 
+      {issueFilter === '__GROUP_MXIK__' && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="font-medium">Режим GROUP_MXIK</div>
+          <div className="mt-1 text-xs text-amber-800">
+            Здесь показываются все товары, которые уже попали в отдельный поток группового ИКПУ. Навигация и кнопка
+            “Следующий” дальше будут работать только внутри этого workflow.
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <label className="text-xs font-medium text-amber-900">Групповой ИКПУ</label>
+            <select
+              value={groupCodeFilter}
+              onChange={e => applyGroupCodeFilter(e.target.value)}
+              className="min-w-[24rem] max-w-full border border-amber-300 bg-white rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+            >
+              <option value="">Все групповые ИКПУ</option>
+              {(groupMxikBuckets ?? []).map(bucket => (
+                <option key={bucket.mxik_code} value={bucket.mxik_code}>
+                  {bucket.mxik_code} · {bucket.mxik_name_ru ?? 'Без названия'} · {bucket.total}
+                </option>
+              ))}
+            </select>
+            {groupCodeFilter && (
+              <button
+                onClick={() => applyGroupCodeFilter('')}
+                className="text-xs text-amber-700 hover:text-amber-900 underline"
+              >
+                Сбросить
+              </button>
+            )}
+          </div>
+          {groupCodeFilter && (
+            <div className="mt-2 text-xs text-amber-800">
+              Показаны только карточки с групповым ИКПУ <span className="font-mono">{groupCodeFilter}</span>.
+            </div>
+          )}
+        </div>
+      )}
+
+      {issueFilter === '__NON_GROUP__' && (
+        <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          <div className="font-medium">Рабочий хвост без GROUP_MXIK</div>
+          <div className="mt-1 text-xs text-blue-800">
+            Здесь остались только обычные карточки качества данных: без бренда, типа, ИКПУ или с внутренним ШК.
+          </div>
+        </div>
+      )}
+
       {selected.size > 0 && (
         <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm">
           <span className="text-blue-700 font-medium">Выбрано: {selected.size}</span>
@@ -296,7 +439,7 @@ export default function ReviewQueue() {
             disabled={batching || !operatorId}
             className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-xs"
           >
-            <CheckCheck size={12} /> Подтвердить
+            <CheckCheck size={12} /> {issueFilter === '__GROUP_MXIK__' ? 'Подтвердить GROUP_MXIK' : 'Подтвердить'}
           </button>
           <button
             onClick={() => batchAction('dismiss')}
@@ -357,7 +500,7 @@ export default function ReviewQueue() {
                 <SortTh col="name" label="Название" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                 <SortTh col="brand" label="Бренд" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="w-36" />
                 <SortTh col="confidence" label="Confidence" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="w-28" />
-                <th className="text-left px-3 py-2 text-xs text-gray-500 font-medium">Проблемы</th>
+                <th className="text-left px-3 py-2 text-xs text-gray-500 font-medium">Причина ревью</th>
                 <th className="w-20"></th>
               </tr>
             </thead>
@@ -366,7 +509,7 @@ export default function ReviewQueue() {
                 <tr
                   key={p.product_id}
                   ref={el => { rowRefs.current[idx] = el; }}
-                  onClick={() => navigate(`/review/${p.product_id}`)}
+                  onClick={() => openReview(p.product_id)}
                   onMouseEnter={e => { setFocusedIdx(idx); showPreview(p, e.currentTarget); }}
                   onMouseLeave={hidePreview}
                   className={`cursor-pointer transition-colors ${
@@ -395,12 +538,18 @@ export default function ReviewQueue() {
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-1">
-                      {(p.issues ?? []).slice(0, 3).map(i => (
-                        <IssueBadge key={i} issue={i} />
+                      {(p.review_reasons ?? []).slice(0, 2).map(reason => (
+                        <IssueBadge key={`reason-${reason}`} issue={reason} />
                       ))}
-                      {(p.issues?.length ?? 0) > 3 && (
+                      {(p.issues ?? [])
+                        .filter(issue => !(p.review_reasons ?? []).includes(issue))
+                        .slice(0, 2)
+                        .map(issue => (
+                          <IssueBadge key={`issue-${issue}`} issue={issue} compact />
+                        ))}
+                      {((p.review_reasons?.length ?? 0) + (p.issues?.length ?? 0)) > 4 && (
                         <span className="text-xs text-gray-400">
-                          +{(p.issues?.length ?? 0) - 3}
+                          +{((p.review_reasons?.length ?? 0) + (p.issues?.length ?? 0)) - 4}
                         </span>
                       )}
                     </div>
@@ -472,9 +621,18 @@ export default function ReviewQueue() {
             {(preview.product.barcodes?.length ?? 0) > 0 && (
               <div><span className="text-gray-400">ШК: </span>{preview.product.barcodes.join(', ')}</div>
             )}
-            {(preview.product.issues?.length ?? 0) > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {preview.product.issues!.map(i => <IssueBadge key={i} issue={i} />)}
+            {((preview.product.review_reasons?.length ?? 0) > 0 || (preview.product.issues?.length ?? 0) > 0) && (
+              <div className="mt-1 space-y-1">
+                {(preview.product.review_reasons?.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {preview.product.review_reasons!.map(reason => <IssueBadge key={`preview-reason-${reason}`} issue={reason} />)}
+                  </div>
+                )}
+                {(preview.product.issues?.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {preview.product.issues!.map(i => <IssueBadge key={`preview-issue-${i}`} issue={i} compact />)}
+                  </div>
+                )}
               </div>
             )}
           </div>

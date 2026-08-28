@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, CheckCheck, ChevronRight, ExternalLink, GitMerge, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -36,6 +36,7 @@ const DECISION_LABEL: Record<string, string> = {
 export default function ReviewDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
   const { operatorId } = useOperatorId();
   const [edits, setEdits] = useState<Partial<Product>>({});
@@ -55,18 +56,41 @@ export default function ReviewDetail() {
     enabled: !!id,
   });
 
+  const scope = searchParams.get('scope');
+  const reviewReason = searchParams.get('reason') ?? '';
+  const groupCode = searchParams.get('group_code') ?? '';
+  const reasonParam = !scope && reviewReason ? `&review_reason=${encodeURIComponent(reviewReason)}` : '';
+  const groupOnlyParam = scope === 'group_mxik' ? '&group_mxik_only=true' : '';
+  const nonGroupOnlyParam = scope === 'non_group' ? '&non_group_only=true' : '';
+  const groupCodeParam = scope === 'group_mxik' && groupCode ? `&mxik_code=${encodeURIComponent(groupCode)}` : '';
+  const queueSearch = searchParams.toString();
+
   const { data: queue } = useQuery({
-    queryKey: ['review/queue'],
-    queryFn: () => api.get<QueueData>('/review/queue?limit=100'),
+    queryKey: ['review/queue', scope, reviewReason, groupCode],
+    queryFn: () => api.get<QueueData>(`/review/queue?limit=1000${reasonParam}${groupOnlyParam}${nonGroupOnlyParam}${groupCodeParam}`),
     staleTime: 30_000,
   });
+
+  function backToQueue() {
+    navigate({
+      pathname: '/review',
+      search: queueSearch ? `?${queueSearch}` : '',
+    });
+  }
+
+  function openReview(productId: string) {
+    navigate({
+      pathname: `/review/${productId}`,
+      search: queueSearch ? `?${queueSearch}` : '',
+    });
+  }
 
   function goNext() {
     const items = queue?.items ?? [];
     const idx = items.findIndex(p => p.product_id === id);
     const next = items[idx + 1];
-    if (next) navigate(`/review/${next.product_id}`);
-    else navigate('/review');
+    if (next) openReview(next.product_id);
+    else backToQueue();
   }
 
   async function dismiss() {
@@ -85,7 +109,7 @@ export default function ReviewDetail() {
   useHotkeys(
     {
       'ctrl+enter': () => confirmProduct(),
-      escape: () => navigate('/review'),
+      escape: () => backToQueue(),
       a: () => confirmProduct(),
       d: () => dismiss(),
       arrowright: () => goNext(),
@@ -155,7 +179,7 @@ export default function ReviewDetail() {
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b bg-white flex-shrink-0">
         <button
-          onClick={() => navigate('/review')}
+          onClick={backToQueue}
           className="text-gray-500 hover:text-gray-800 flex items-center gap-1 text-sm"
         >
           <ArrowLeft size={14} /> Очередь
@@ -199,7 +223,7 @@ export default function ReviewDetail() {
             const next = items[idx + 1];
             return next ? (
               <button
-                onClick={() => navigate(`/review/${next.product_id}`)}
+                onClick={() => openReview(next.product_id)}
                 className="flex items-center gap-1 text-gray-500 hover:text-gray-800 text-sm border rounded px-2 py-1.5"
                 title="Следующий без подтверждения (→)"
               >
@@ -214,6 +238,30 @@ export default function ReviewDetail() {
       <div className="flex-1 overflow-auto grid grid-cols-2 gap-0 divide-x">
         {/* Left: raw data */}
         <div className="p-4 overflow-auto">
+          {scope === 'group_mxik' && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <div className="text-sm font-medium text-amber-900">Режим GROUP_MXIK</div>
+              <div className="mt-1 text-xs text-amber-800">
+                Карточка открыта внутри отдельного потока группового ИКПУ. Кнопка “Следующий” и возврат в очередь
+                сохраняют этот режим, чтобы оператор не выпадал обратно в общую очередь.
+              </div>
+              {groupCode && (
+                <div className="mt-2 text-xs text-amber-900">
+                  Текущий фильтр по групповому ИКПУ: <span className="font-mono">{groupCode}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {scope === 'non_group' && (
+            <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3">
+              <div className="text-sm font-medium text-blue-900">Негрупповой хвост</div>
+              <div className="mt-1 text-xs text-blue-800">
+                Здесь остались только обычные карточки качества данных без группового ИКПУ workflow.
+              </div>
+            </div>
+          )}
+
           <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
             Исходные данные
           </div>
@@ -228,14 +276,25 @@ export default function ReviewDetail() {
             <Row label="Статус" value={data.product.status} />
           </div>
 
+          {(data.product.review_reasons?.length ?? 0) > 0 && (
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                Причина ревью
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {data.product.review_reasons!.map(reason => <IssueBadge key={`reason-${reason}`} issue={reason} />)}
+              </div>
+            </div>
+          )}
+
           {/* Issues */}
           {(data.product.issues?.length ?? 0) > 0 && (
             <div className="mt-4">
               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                Проблемы
+                Технические проблемы
               </div>
               <div className="flex flex-wrap gap-1">
-                {data.product.issues!.map(i => <IssueBadge key={i} issue={i} />)}
+                {data.product.issues!.map(i => <IssueBadge key={i} issue={i} compact />)}
               </div>
             </div>
           )}
@@ -324,6 +383,72 @@ export default function ReviewDetail() {
             product={product}
             onChange={patch => setEdits(prev => ({ ...prev, ...patch }))}
           />
+
+          {((data.product.review_reasons ?? []).includes('GROUP_MXIK') || !!data.product.mxik_is_group_code) && (
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                Workflow GROUP_MXIK
+              </div>
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                <div className="text-sm text-blue-900 font-medium">
+                  Рекомендация по цепочке «конкретный ИКПУ → групповой ИКПУ»
+                </div>
+                <div className="mt-1 text-xs text-blue-700">
+                  Берём похожий товар с конкретным ИКПУ и штрихкодом, затем строим групповой код через обнуление последних 6 цифр, только если такой групповой ИКПУ реально есть в каталоге.
+                </div>
+
+                {data.group_mxik_candidates.length > 0 ? (
+                  <div className="mt-3 space-y-2">
+                    {data.group_mxik_candidates.map(candidate => (
+                      <div key={`${candidate.source_product_id}-${candidate.suggested_group_mxik_code}`} className="rounded border border-blue-200 bg-white p-3">
+                        <div className="flex items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs text-gray-500">Источник с конкретным ИКПУ</div>
+                            <div className="text-sm font-medium text-gray-900 truncate">
+                              {candidate.source_name_canonical}
+                            </div>
+                            <div className="mt-1 text-xs text-gray-600">
+                              {candidate.source_brand_name ?? '—'} · похожесть {Math.round(candidate.similarity * 100)}%
+                              {candidate.brand_match ? ' · тот же бренд' : ''}
+                              {candidate.type_match ? ' · тот же тип' : ''}
+                            </div>
+                            <div className="mt-1 text-xs text-gray-600 font-mono break-all">
+                              Конкретный ИКПУ: {candidate.source_specific_mxik_code}
+                            </div>
+                            <div className="mt-1 text-xs text-gray-900 font-mono break-all">
+                              Групповой ИКПУ: {candidate.suggested_group_mxik_code}
+                            </div>
+                            <div className="mt-1 text-xs text-gray-600">
+                              {candidate.suggested_group_mxik_name_ru ?? '—'}
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-2">
+                            <a
+                              href={`/review/${candidate.source_product_id}`}
+                              className="text-xs text-blue-600 hover:underline"
+                            >
+                              Открыть источник
+                            </a>
+                            <button
+                              onClick={() => handleMxikSelect(candidate.suggested_group_mxik_code, null)}
+                              disabled={!operatorId || candidate.matches_current_mxik}
+                              className="px-2.5 py-1.5 rounded bg-blue-600 text-white text-xs hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              {candidate.matches_current_mxik ? 'Уже установлен' : 'Применить групповой ИКПУ'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-3 text-xs text-gray-600">
+                    Похожий товар с конкретным ИКПУ и подтверждённым групповым кодом пока не найден.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* MXIK selector */}
           <div className="mt-4">

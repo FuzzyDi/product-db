@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api } from '@/api/client';
 import type { MxikHealth, PipelineStats } from '@/types';
@@ -262,6 +263,15 @@ const STATUS_COLOR: Record<string, string> = {
   certified: 'bg-green-500',
 };
 
+const REVIEW_REASON_LABEL: Record<string, string> = {
+  GROUP_MXIK: 'Групповой ИКПУ',
+  INTERNAL_BC_AS_GLOBAL: 'Внутренний ШК как глобальный',
+  MISSING_MXIK: 'Нет ИКПУ',
+  MISSING_BRAND: 'Нет бренда',
+  MISSING_PRODUCT_TYPE: 'Нет типа',
+  LOW_CONFIDENCE: 'Низкая уверенность',
+};
+
 export default function Dashboard() {
   const qc = useQueryClient();
 
@@ -388,6 +398,35 @@ export default function Dashboard() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg border p-4 mb-4">
+            <div className="text-xs text-gray-500 mb-3">Причины ревью</div>
+            <div className="space-y-2">
+              {Object.entries(s.review_breakdown ?? {})
+                .filter(([, count]) => count > 0)
+                .sort((a, b) => b[1] - a[1])
+                .map(([reason, count]) => (
+                  <div key={reason} className="flex items-center justify-between text-sm">
+                    <span className="text-gray-700">{REVIEW_REASON_LABEL[reason] ?? reason}</span>
+                    <span className="font-medium tabular-nums">{count.toLocaleString()}</span>
+                  </div>
+                ))}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link
+                to="/review?scope=non_group"
+                className="text-xs px-2.5 py-1.5 rounded border bg-blue-50 text-blue-700 hover:bg-blue-100"
+              >
+                Негрупповые: {s.review_non_group_size}
+              </Link>
+              <Link
+                to="/review?reason=GROUP_MXIK"
+                className="text-xs px-2.5 py-1.5 rounded border bg-orange-50 text-orange-700 hover:bg-orange-100"
+              >
+                Групповой ИКПУ: {s.review_group_mxik_size}
+              </Link>
             </div>
           </div>
         </>

@@ -67,12 +67,21 @@ export interface PipelineStats {
   total_products: number;
   by_status: Record<string, number>;
   review_queue_size: number;
+  review_group_mxik_size: number;
+  review_non_group_size: number;
+  review_breakdown: Record<string, number>;
   with_brand: number;
   with_mxik: number;
   with_barcode: number;
   with_category: number;
   with_type: number;
   certified_today: number;
+}
+
+export interface GroupMxikBucket {
+  mxik_code: string;
+  mxik_name_ru: string | null;
+  total: number;
 }
 
 export interface MxikHealth {
@@ -95,5 +104,17 @@ export interface ReviewDetail {
     name_canonical: string;
     brand_name: string | null;
     sim: number;
+  }>;
+  group_mxik_candidates: Array<{
+    source_product_id: string;
+    source_name_canonical: string;
+    source_brand_name: string | null;
+    source_specific_mxik_code: string;
+    suggested_group_mxik_code: string;
+    suggested_group_mxik_name_ru: string | null;
+    similarity: number;
+    brand_match: boolean;
+    type_match: boolean;
+    matches_current_mxik: boolean;
   }>;
 }

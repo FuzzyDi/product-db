@@ -26,6 +26,33 @@ async def pipeline_stats(db: AsyncSession = Depends(get_db)):
     review_queue = await db.scalar(
         select(func.count(Product.product_id)).where(Product.review_required.is_(True))
     ) or 0
+    review_group_mxik = await db.scalar(
+        select(func.count(Product.product_id)).where(
+            Product.review_required.is_(True),
+            Product.mxik_is_group_code.is_(True),
+        )
+    ) or 0
+    review_non_group = await db.scalar(
+        select(func.count(Product.product_id)).where(
+            Product.review_required.is_(True),
+            Product.mxik_is_group_code.is_(False),
+        )
+    ) or 0
+    review_breakdown = {}
+    for reason in (
+        "GROUP_MXIK",
+        "INTERNAL_BC_AS_GLOBAL",
+        "MISSING_MXIK",
+        "MISSING_BRAND",
+        "MISSING_PRODUCT_TYPE",
+        "LOW_CONFIDENCE",
+    ):
+        review_breakdown[reason] = await db.scalar(
+            select(func.count(Product.product_id)).where(
+                Product.review_required.is_(True),
+                Product.review_reasons.contains([reason]),
+            )
+        ) or 0
     with_brand = await db.scalar(
         select(func.count(Product.product_id)).where(Product.brand_id.isnot(None))
     ) or 0
@@ -55,6 +82,9 @@ async def pipeline_stats(db: AsyncSession = Depends(get_db)):
         total_products=total,
         by_status=by_status,
         review_queue_size=review_queue,
+        review_group_mxik_size=review_group_mxik,
+        review_non_group_size=review_non_group,
+        review_breakdown=review_breakdown,
         with_brand=with_brand,
         with_mxik=with_mxik,
         with_barcode=with_barcode,

@@ -126,12 +126,147 @@ _SORT_COLUMNS = {
 }
 
 
+async def _find_group_mxik_candidates(product: Product, db: AsyncSession) -> list[dict]:
+    """Подсказки для group MXIK:
+    берём похожие товары с конкретным MXIK и штрихкодом, затем поднимаемся к групповому коду
+    через обнуление последних 6 цифр, если такой код реально есть в каталоге.
+    """
+    if not product.name_canonical:
+        return []
+
+    candidates: list[dict] = []
+    seen_group_codes: set[str] = set()
+
+    async def _append_candidates(rows: list[dict]) -> None:
+        for row in rows:
+            specific_code = row["mxik_code"]
+            if not specific_code or len(specific_code) < 8:
+                continue
+            group_code = specific_code[:8] + "000000"
+            if group_code in seen_group_codes:
+                continue
+            group_obj = await db.scalar(
+                select(MxikCatalog).where(
+                    MxikCatalog.mxik == group_code,
+                    MxikCatalog.is_group_code.is_(True),
+                    MxikCatalog.is_active.is_(True),
+                )
+            )
+            if not group_obj:
+                continue
+            seen_group_codes.add(group_code)
+            candidates.append({
+                "source_product_id": row["product_id"],
+                "source_name_canonical": row["name_canonical"],
+                "source_brand_name": row["brand_name"],
+                "source_specific_mxik_code": specific_code,
+                "suggested_group_mxik_code": group_code,
+                "suggested_group_mxik_name_ru": group_obj.mxik_name_ru,
+                "similarity": round(float(row["sim"] or 0), 3),
+                "brand_match": bool(row["brand_match"]),
+                "type_match": bool(row["type_match"]),
+                "matches_current_mxik": product.mxik_code == group_code,
+            })
+            if len(candidates) >= 5:
+                return
+
+    sim_result = await db.execute(
+        text(
+            """
+            SELECT
+                p.product_id::text AS product_id,
+                p.name_canonical,
+                p.brand_name,
+                p.mxik_code,
+                similarity(p.name_canonical, :name) AS sim,
+                CASE
+                    WHEN CAST(:brand_id AS INTEGER) IS NOT NULL
+                     AND p.brand_id = CAST(:brand_id AS INTEGER)
+                    THEN 1 ELSE 0
+                END AS brand_match,
+                CASE
+                    WHEN CAST(:product_type_id AS INTEGER) IS NOT NULL
+                     AND p.product_type_id = CAST(:product_type_id AS INTEGER)
+                    THEN 1 ELSE 0
+                END AS type_match
+            FROM products p
+            WHERE p.product_id != :pid
+              AND p.name_canonical % :name
+              AND p.mxik_code IS NOT NULL
+              AND COALESCE(p.mxik_is_group_code, false) = false
+              AND EXISTS (
+                  SELECT 1
+                  FROM product_barcodes pb
+                  WHERE pb.product_id = p.product_id
+              )
+            ORDER BY type_match DESC, brand_match DESC, sim DESC
+            LIMIT 20
+            """
+        ),
+        {
+            "name": product.name_canonical,
+            "pid": str(product.product_id),
+            "brand_id": product.brand_id,
+            "product_type_id": product.product_type_id,
+        },
+    )
+    await _append_candidates(list(sim_result.mappings().all()))
+
+    if not candidates and product.product_type_id:
+        fallback_result = await db.execute(
+            text(
+                """
+                SELECT
+                    p.product_id::text AS product_id,
+                    p.name_canonical,
+                    p.brand_name,
+                    p.mxik_code,
+                    similarity(COALESCE(p.name_canonical, ''), COALESCE(:name, '')) AS sim,
+                    CASE
+                        WHEN CAST(:brand_id AS INTEGER) IS NOT NULL
+                         AND p.brand_id = CAST(:brand_id AS INTEGER)
+                        THEN 1 ELSE 0
+                    END AS brand_match,
+                    CASE
+                        WHEN p.product_type_id = CAST(:product_type_id AS INTEGER)
+                        THEN 1 ELSE 0
+                    END AS type_match
+                FROM products p
+                WHERE p.product_id != :pid
+                  AND p.product_type_id = CAST(:product_type_id AS INTEGER)
+                  AND p.mxik_code IS NOT NULL
+                  AND COALESCE(p.mxik_is_group_code, false) = false
+                  AND EXISTS (
+                      SELECT 1
+                      FROM product_barcodes pb
+                      WHERE pb.product_id = p.product_id
+                  )
+                ORDER BY brand_match DESC, sim DESC, p.updated_at DESC
+                LIMIT 20
+                """
+            ),
+            {
+                "name": product.name_canonical,
+                "pid": str(product.product_id),
+                "brand_id": product.brand_id,
+                "product_type_id": product.product_type_id,
+            },
+        )
+        await _append_candidates(list(fallback_result.mappings().all()))
+
+    return candidates
+
+
 @router.get("/queue", response_model=ApiResponse)
 async def review_queue(
     offset: int = 0,
     limit: int = 50,
     sort_by: str = "confidence",
     sort_dir: str = "asc",
+    review_reason: str | None = None,
+    group_mxik_only: bool = False,
+    non_group_only: bool = False,
+    mxik_code: str | None = None,
     product_type_id: int | None = None,
     category_id: int | None = None,
     no_category: bool = False,
@@ -149,6 +284,16 @@ async def review_queue(
         base_where.append(Product.category_id.is_(None))
     if no_type:
         base_where.append(Product.product_type_id.is_(None))
+    if review_reason:
+        base_where.append(Product.review_reasons.contains([review_reason]))
+    if mxik_code:
+        base_where.append(Product.mxik_code == mxik_code)
+    if group_mxik_only and non_group_only:
+        raise HTTPException(status_code=400, detail="Use only one of group_mxik_only or non_group_only")
+    if group_mxik_only:
+        base_where.append(Product.mxik_is_group_code.is_(True))
+    if non_group_only:
+        base_where.append(Product.mxik_is_group_code.is_(False))
 
     total = await db.scalar(
         select(func.count(Product.product_id)).where(*base_where)
@@ -174,6 +319,39 @@ async def review_queue(
         "offset": offset,
         "limit": limit,
     })
+
+
+@router.get("/group-mxik-buckets", response_model=ApiResponse)
+async def group_mxik_buckets(
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(
+            Product.mxik_code.label("mxik_code"),
+            MxikCatalog.mxik_name_ru.label("mxik_name_ru"),
+            func.count(Product.product_id).label("total"),
+        )
+        .outerjoin(MxikCatalog, MxikCatalog.mxik == Product.mxik_code)
+        .where(
+            Product.review_required.is_(True),
+            Product.status != "merged",
+            Product.mxik_is_group_code.is_(True),
+            Product.mxik_code.is_not(None),
+        )
+        .group_by(Product.mxik_code, MxikCatalog.mxik_name_ru)
+        .order_by(func.count(Product.product_id).desc(), Product.mxik_code.asc())
+        .limit(limit)
+    )
+    rows = result.mappings().all()
+    return ApiResponse(data=[
+        {
+            "mxik_code": row["mxik_code"],
+            "mxik_name_ru": row["mxik_name_ru"],
+            "total": row["total"],
+        }
+        for row in rows
+    ])
 
 
 @router.get("/{product_id}/decisions", response_model=ApiResponse)
@@ -255,11 +433,15 @@ async def review_detail(product_id: uuid.UUID, db: AsyncSession = Depends(get_db
     barcodes = [row.barcode for row in bc_result.all()]
     product_dict = {k: v for k, v in product.__dict__.items() if not k.startswith('_')}
     product_dict['barcodes'] = barcodes
+    group_mxik_candidates = []
+    if product.review_required and (product.mxik_is_group_code or (product.review_reasons and "GROUP_MXIK" in product.review_reasons)):
+        group_mxik_candidates = await _find_group_mxik_candidates(product, db)
 
     return ApiResponse(data={
         "product": ProductResponse.model_validate(product_dict).model_dump(),
         "mxik_candidates": mxik_candidates,
         "similar_products": similar,
+        "group_mxik_candidates": group_mxik_candidates,
     })
 
 
