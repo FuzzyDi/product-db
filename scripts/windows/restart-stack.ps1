@@ -23,7 +23,7 @@ function Restart-FrontendTask {
     $task = Get-ScheduledTask -TaskName $frontendTaskName -ErrorAction Stop
     $taskInfo = Get-ScheduledTaskInfo -TaskName $frontendTaskName -ErrorAction Stop
 
-    if ($taskInfo.State -eq 'Running') {
+    if ($task.State -eq 'Running') {
         Stop-ScheduledTask -TaskName $frontendTaskName
         Start-Sleep -Seconds 2
     }
@@ -40,8 +40,9 @@ function Restart-FrontendTask {
     Start-ScheduledTask -TaskName $frontendTaskName
     Start-Sleep -Seconds 3
 
+    $updatedTask = Get-ScheduledTask -TaskName $frontendTaskName -ErrorAction Stop
     $updatedInfo = Get-ScheduledTaskInfo -TaskName $frontendTaskName -ErrorAction Stop
-    Write-Host ("Task state: {0}; LastTaskResult: {1}" -f $updatedInfo.State, $updatedInfo.LastTaskResult)
+    Write-Host ("Task state: {0}; LastTaskResult: {1}" -f $updatedTask.State, $updatedInfo.LastTaskResult)
 }
 
 function Restart-BackendStack {

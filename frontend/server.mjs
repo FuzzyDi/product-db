@@ -1,4 +1,4 @@
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -6,12 +6,33 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const projectRoot = dirname(__dirname);
 const distDir = join(__dirname, 'dist');
 const indexFile = join(distDir, 'index.html');
 
 const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 3002);
 const apiTarget = process.env.API_TARGET || 'http://127.0.0.1:8001';
+
+function readDefaultApiKey() {
+  if (process.env.API_PROXY_KEY) {
+    return process.env.API_PROXY_KEY.trim();
+  }
+
+  try {
+    const envText = readFileSync(join(projectRoot, '.env'), 'utf8');
+    const line = envText
+      .split(/\r?\n/)
+      .find(item => item.startsWith('API_KEYS='));
+    if (!line) return '';
+    const value = line.slice('API_KEYS='.length).trim();
+    return value.split(',')[0]?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
+const defaultApiKey = readDefaultApiKey();
 
 const CONTENT_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -46,6 +67,9 @@ async function proxyApi(req, res) {
     }
   }
   headers.set('host', targetUrl.host);
+  if (defaultApiKey && !headers.has('x-api-key')) {
+    headers.set('x-api-key', defaultApiKey);
+  }
 
   try {
     const upstream = await fetch(targetUrl, {

@@ -4,10 +4,6 @@ import { Plus, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { api } from '@/api/client';
 import type { Brand } from '@/types';
 
-interface BrandsData {
-  items?: Brand[];
-}
-
 export default function BrandManager() {
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
@@ -18,10 +14,12 @@ export default function BrandManager() {
   const [reprocessing, setReprocessing] = useState(false);
   const [reprocessResult, setReprocessResult] = useState<{ updated: number; checked: number } | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['refs/brands', search],
     queryFn: () =>
-      api.get<Brand[]>(`/refs/brands${search ? `?q=${encodeURIComponent(search)}` : ''}`),
+      api.get<Brand[]>(
+        `/refs/brands?limit=1000${search ? `&q=${encodeURIComponent(search)}` : ''}`,
+      ),
   });
 
   const { data: unrecognized } = useQuery({
@@ -78,7 +76,10 @@ export default function BrandManager() {
   return (
     <div className="p-6 max-w-5xl">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-lg font-semibold">Бренды</h1>
+        <h1 className="text-lg font-semibold">
+          Бренды
+          <span className="ml-2 text-sm font-normal text-gray-500">{brands.length} видимых</span>
+        </h1>
         <div className="flex items-center gap-3">
           {reprocessResult && (
             <span className="text-sm text-green-600">
@@ -133,7 +134,13 @@ export default function BrandManager() {
             className="w-full border rounded px-3 py-1.5 text-sm mb-3 focus:outline-none focus:ring-1 focus:ring-blue-400"
           />
 
-          {isLoading ? (
+          {error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {String(error.message).toLowerCase().includes('api key')
+                ? 'Нет доступа к справочнику брендов: введите корректный API Key в левом сайдбаре.'
+                : `Не удалось загрузить бренды: ${error.message}`}
+            </div>
+          ) : isLoading ? (
             <div className="text-gray-400 text-sm">Загрузка...</div>
           ) : (
             <div className="space-y-1">

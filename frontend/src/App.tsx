@@ -1,20 +1,25 @@
-import { BrowserRouter, NavLink, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
+import { Suspense, lazy, useState } from 'react';
+import { BrowserRouter, NavLink, Outlet, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { useQuery } from '@tanstack/react-query';
 import { LayoutDashboard, ListChecks, Search, Tag, Upload, Layers, GitMerge } from 'lucide-react';
 import { api } from '@/api/client';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useOperatorId } from '@/hooks/useOperatorId';
-import Dashboard from '@/components/Dashboard';
-import ReviewQueue from '@/components/ReviewQueue';
-import ReviewDetail from '@/components/ReviewDetail';
-import ProductSearch from '@/components/ProductSearch';
-import BrandManager from '@/components/BrandManager';
-import CategoryManager from '@/components/CategoryManager';
-import XlsxImport from '@/components/XlsxImport';
-import DuplicatesReport from '@/components/DuplicatesReport';
 import { cn } from '@/lib/utils';
-import { useState } from 'react';
+
+const Dashboard = lazy(() => import('@/components/Dashboard'));
+const ReviewQueue = lazy(() => import('@/components/ReviewQueue'));
+const ReviewDetail = lazy(() => import('@/components/ReviewDetail'));
+const ProductSearch = lazy(() => import('@/components/ProductSearch'));
+const BrandManager = lazy(() => import('@/components/BrandManager'));
+const CategoryManager = lazy(() => import('@/components/CategoryManager'));
+const XlsxImport = lazy(() => import('@/components/XlsxImport'));
+const DuplicatesReport = lazy(() => import('@/components/DuplicatesReport'));
+
+function PageFallback() {
+  return <div className="p-6 text-sm text-gray-500">Загрузка...</div>;
+}
 
 function Layout() {
   const { apiKey, setApiKey } = useApiKey();
@@ -108,14 +113,70 @@ export default function App() {
       <Toaster position="bottom-right" richColors closeButton />
       <Routes>
         <Route element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="review" element={<ReviewQueue />} />
-          <Route path="review/:id" element={<ReviewDetail />} />
-          <Route path="products" element={<ProductSearch />} />
-          <Route path="refs/brands" element={<BrandManager />} />
-          <Route path="refs/categories" element={<CategoryManager />} />
-          <Route path="import" element={<XlsxImport />} />
-          <Route path="duplicates" element={<DuplicatesReport />} />
+          <Route
+            index
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <Dashboard />
+              </Suspense>
+            }
+          />
+          <Route
+            path="review"
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <ReviewQueue />
+              </Suspense>
+            }
+          />
+          <Route
+            path="review/:id"
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <ReviewDetail />
+              </Suspense>
+            }
+          />
+          <Route
+            path="products"
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <ProductSearch />
+              </Suspense>
+            }
+          />
+          <Route
+            path="refs/brands"
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <BrandManager />
+              </Suspense>
+            }
+          />
+          <Route
+            path="refs/categories"
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <CategoryManager />
+              </Suspense>
+            }
+          />
+          <Route
+            path="import"
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <XlsxImport />
+              </Suspense>
+            }
+          />
+          <Route
+            path="duplicates"
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <DuplicatesReport />
+              </Suspense>
+            }
+          />
         </Route>
       </Routes>
     </BrowserRouter>
